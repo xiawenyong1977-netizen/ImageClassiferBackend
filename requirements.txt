@@ -1,0 +1,36 @@
+# FastAPI框架和ASGI服务器
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+gunicorn==21.2.0
+
+# 数据库
+pymysql==1.1.0
+aiomysql==0.2.0
+cryptography==42.0.0
+
+# 数据验证和模型
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# 图片处理
+Pillow==10.2.0
+
+# 大模型API客户端
+dashscope>=1.14.0      # 阿里云灵积DashScope SDK
+openai==1.10.0
+# anthropic==0.15.0  # 暂时注释，如果需要Claude再安装
+
+# 工具库
+python-multipart==0.0.6  # 文件上传
+python-dotenv==1.0.0      # 环境变量
+loguru==0.7.2             # 日志
+
+# HTTP客户端
+httpx==0.26.0
+aiofiles==23.2.1
+
+# 测试工具（可选）
+pytest==7.4.4
+pytest-asyncio==0.23.3
+httpx==0.26.0
+

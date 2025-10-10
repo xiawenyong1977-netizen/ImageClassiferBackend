@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图片分类后端管理系统</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖼️</text></svg>">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .tab-button {
+            padding: 12px 24px;
+            background: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            transition: all 0.3s;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .tab-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .tab-button.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+
+        .card h2 {
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            color: #333;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        .stat-card h3 {
+            font-size: 0.9rem;
+            opacity: 0.9;
+            margin-bottom: 10px;
+        }
+
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stat-card .sub {
+            font-size: 0.85rem;
+            opacity: 0.8;
+        }
+
+        .upload-area {
+            border: 2px dashed #667eea;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: #f8f9fa;
+        }
+
+        .upload-area:hover {
+            border-color: #764ba2;
+            background: #f0f1f5;
+        }
+
+        .upload-area.dragover {
+            border-color: #764ba2;
+            background: #e8e9f0;
+        }
+
+        .preview-image {
+            max-width: 100%;
+            max-height: 400px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        .result-box {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+
+        .result-box h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+
+        .result-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .result-item:last-child {
+            border-bottom: none;
+        }
+
+        .result-label {
+            font-weight: 500;
+            color: #666;
+        }
+
+        .result-value {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .category-badge {
+            display: inline-block;
+            padding: 6px 16px;
+            background: #667eea;
+            color: white;
+            border-radius: 20px;
+            font-size: 1.1rem;
+        }
+
+        .confidence-bar {
+            width: 100%;
+            height: 20px;
+            background: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.5s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 0.85rem;
+            font-weight: bold;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #333;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 1rem;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .category-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .category-item {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .category-item .name {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .category-item .count {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+        }
+
+        tr:hover {
+            background: #f8f9fa;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+
+        .status-dot.green {
+            background: #28a745;
+        }
+
+        .status-dot.red {
+            background: #dc3545;
+        }
+
+        .footer {
+            text-align: center;
+            color: white;
+            margin-top: 40px;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🖼️ 图片分类后端管理系统</h1>
+            <p>基于大模型的智能图片分类服务</p>
+        </div>
+
+        <!-- 系统状态 -->
+        <div class="card">
+            <h2>系统状态</h2>
+            <div id="system-status">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>正在加载...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 标签页 -->
+        <div class="tabs">
+            <button class="tab-button active" onclick="showTab('stats')">📊 统计数据</button>
+            <button class="tab-button" onclick="showTab('test')">🧪 分类测试</button>
+            <button class="tab-button" onclick="showTab('config')">⚙️ 配置管理</button>
+        </div>
+
+        <!-- 统计数据标签页 -->
+        <div id="stats-tab" class="tab-content active">
+            <div class="card">
+                <h2>今日统计</h2>
+                <div id="today-stats">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>缓存效率</h2>
+                <div id="cache-stats">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>分类分布</h2>
+                <div id="category-distribution">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 分类测试标签页 -->
+        <div id="test-tab" class="tab-content">
+            <div class="card">
+                <h2>图片分类测试</h2>
+                
+                <div class="upload-area" id="upload-area">
+                    <input type="file" id="file-input" accept="image/*" style="display: none;">
+                    <p style="font-size: 3rem; margin-bottom: 10px;">📁</p>
+                    <p style="font-size: 1.2rem; color: #667eea; font-weight: 500;">点击或拖拽图片到此处</p>
+                    <p style="color: #999; margin-top: 10px;">支持 JPG, PNG, WebP 格式，最大10MB</p>
+                </div>
+
+                <div id="preview-area" class="hidden">
+                    <img id="preview-image" class="preview-image" alt="预览">
+                    <div style="text-align: center; margin: 20px 0;">
+                        <button class="btn btn-primary" onclick="classifyImage()">🚀 开始分类</button>
+                        <button class="btn" onclick="resetUpload()" style="margin-left: 10px; background: #6c757d; color: white;">重新选择</button>
+                    </div>
+                </div>
+
+                <div id="result-area" class="hidden">
+                    <div class="result-box">
+                        <h3>分类结果</h3>
+                        <div id="classification-result"></div>
+                    </div>
+                </div>
+
+                <div id="test-alert"></div>
+            </div>
+        </div>
+
+        <!-- 配置管理标签页 -->
+        <div id="config-tab" class="tab-content">
+            <div class="card">
+                <h2>API配置</h2>
+                <div id="config-alert"></div>
+                
+                <form onsubmit="event.preventDefault(); saveConfig();">
+                    <div class="form-group">
+                        <label for="api-url">API服务地址</label>
+                        <input type="text" id="api-url" placeholder="http://123.57.68.4:8000">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="llm-provider">大模型提供商</label>
+                        <select id="llm-provider">
+                            <option value="aliyun" selected>阿里云通义千问 (Qwen-VL)</option>
+                            <option value="openai">OpenAI (GPT-4 Vision)</option>
+                            <option value="claude">Claude (Vision)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="llm-api-key">API密钥</label>
+                        <input type="password" id="llm-api-key" placeholder="sk-..." autocomplete="off">
+                        <small style="color: #666;">注意：此处仅用于显示，实际修改需要在服务器.env文件中配置</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="llm-model">模型名称</label>
+                        <input type="text" id="llm-model" placeholder="qwen-vl-plus" value="qwen-vl-plus" readonly>
+                        <small style="color: #666;">固定使用通义千问3-VL-Plus</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="prompt-config">分类提示词（Prompt）</label>
+                        <textarea id="prompt-config" rows="12" style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-family: monospace; font-size: 0.9rem;"></textarea>
+                        <small style="color: #666;">
+                            ⚠️ 修改提示词需要在服务器.env文件中配置CLASSIFICATION_PROMPT参数，然后重启服务<br>
+                            此处仅用于预览和编辑，实际生效需要在服务器更新
+                        </small>
+                    </div>
+
+                    <button type="submit" class="btn btn-success">💾 保存到本地</button>
+                    <button type="button" class="btn btn-primary" style="margin-left: 10px;" onclick="loadConfig()">🔄 加载配置</button>
+                    <button type="button" class="btn" style="margin-left: 10px; background: #17a2b8; color: white;" onclick="resetPrompt()">🔄 恢复默认提示词</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2>分类类别说明</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>类别Key</th>
+                            <th>中文名称</th>
+                            <th>英文名称</th>
+                            <th>说明</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>social_activities</code></td>
+                            <td>社交活动</td>
+                            <td>Social Activities</td>
+                            <td>聚会、合影等</td>
+                        </tr>
+                        <tr>
+                            <td><code>pets</code></td>
+                            <td>宠物萌照</td>
+                            <td>Pet Photos</td>
+                            <td>猫、狗等宠物</td>
+                        </tr>
+                        <tr>
+                            <td><code>single_person</code></td>
+                            <td>单人照片</td>
+                            <td>Single Person Photos</td>
+                            <td>个人照、自拍</td>
+                        </tr>
+                        <tr>
+                            <td><code>foods</code></td>
+                            <td>美食记录</td>
+                            <td>Food Records</td>
+                            <td>美食、餐饮</td>
+                        </tr>
+                        <tr>
+                            <td><code>travel_scenery</code></td>
+                            <td>旅行风景</td>
+                            <td>Travel Scenery</td>
+                            <td>旅游、风景</td>
+                        </tr>
+                        <tr>
+                            <td><code>screenshot</code></td>
+                            <td>手机截图</td>
+                            <td>Mobile Screenshots</td>
+                            <td>屏幕截图</td>
+                        </tr>
+                        <tr>
+                            <td><code>idcard</code></td>
+                            <td>证件照</td>
+                            <td>ID Card</td>
+                            <td>身份证等证件</td>
+                        </tr>
+                        <tr>
+                            <td><code>other</code></td>
+                            <td>其它</td>
+                            <td>Other Images</td>
+                            <td>其他类型</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>图片分类后端管理系统 v1.0 | Powered by FastAPI</p>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
+
