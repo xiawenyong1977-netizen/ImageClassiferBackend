@@ -90,6 +90,20 @@ class Settings(BaseSettings):
         description="图片分类提示词"
     )
     
+    # ===== 认证配置 =====
+    JWT_SECRET_KEY: str = Field(
+        default="your-secret-key-change-in-production-please-use-strong-random-key",
+        description="JWT密钥（请在生产环境修改为随机强密钥）"
+    )
+    JWT_ALGORITHM: str = Field(default="HS256", description="JWT算法")
+    JWT_ACCESS_TOKEN_EXPIRE_DAYS: int = Field(default=1, description="Token过期天数")
+    
+    ADMIN_USERNAME: str = Field(default="zywl", description="管理员用户名")
+    ADMIN_PASSWORD_HASH: str = Field(
+        default="$2b$12$rY8vqF5xKZYP8QHXKvN8HeqN8WvXqQxVqYqzL9WQxN9wYvN8HeqN8",
+        description="管理员密码哈希（bcrypt）"
+    )
+    
     @property
     def mysql_url(self) -> str:
         """获取MySQL连接URL"""

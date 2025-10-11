@@ -13,7 +13,7 @@ import os
 
 from app.config import settings
 from app.database import db
-from app.api import classify, stats, health
+from app.api import classify, stats, health, location, auth
 
 
 # 配置日志
@@ -77,9 +77,11 @@ app.add_middleware(
 )
 
 # 注册路由
+app.include_router(auth.router)
 app.include_router(classify.router)
 app.include_router(stats.router)
 app.include_router(health.router)
+app.include_router(location.router)
 
 # 静态文件服务（Web管理界面）
 web_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")

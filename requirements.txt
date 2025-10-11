@@ -25,6 +25,10 @@ python-multipart==0.0.6  # 文件上传
 python-dotenv==1.0.0      # 环境变量
 loguru==0.7.2             # 日志
 
+# 认证和安全
+python-jose[cryptography]==3.3.0  # JWT token
+passlib[bcrypt]==1.7.4            # 密码哈希
+
 # HTTP客户端
 httpx==0.26.0
 aiofiles==23.2.1

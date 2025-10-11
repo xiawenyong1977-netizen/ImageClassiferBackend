@@ -1,5 +1,68 @@
 // 配置
 const CONFIG_KEY = 'image_classifier_config';
+const TOKEN_KEY = 'admin_token';
+const TOKEN_EXPIRES_KEY = 'token_expires';
+const USERNAME_KEY = 'admin_username';
+
+// 认证相关函数
+function getAuthToken() {
+    return localStorage.getItem(TOKEN_KEY);
+}
+
+function getAuthHeaders() {
+    const token = getAuthToken();
+    if (token) {
+        return {
+            'Authorization': `Bearer ${token}`
+        };
+    }
+    return {};
+}
+
+function checkAuth() {
+    const token = getAuthToken();
+    const expires = parseInt(localStorage.getItem(TOKEN_EXPIRES_KEY) || '0');
+    
+    if (!token || expires < Date.now()) {
+        // 未登录或token已过期，跳转到登录页
+        window.location.href = '/static/login.html';
+        return false;
+    }
+    return true;
+}
+
+function logout() {
+    if (confirm('确定要退出登录吗？')) {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(TOKEN_EXPIRES_KEY);
+        localStorage.removeItem(USERNAME_KEY);
+        window.location.href = '/static/login.html';
+    }
+}
+
+// 带认证的fetch请求
+async function authFetch(url, options = {}) {
+    const headers = {
+        ...getAuthHeaders(),
+        ...(options.headers || {})
+    };
+    
+    const response = await fetch(url, {
+        ...options,
+        headers
+    });
+    
+    if (response.status === 401) {
+        // 认证失败，跳转到登录页
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(TOKEN_EXPIRES_KEY);
+        localStorage.removeItem(USERNAME_KEY);
+        window.location.href = '/static/login.html';
+        throw new Error('认证失败，请重新登录');
+    }
+    
+    return response;
+}
 
 // 默认提示词
 const DEFAULT_PROMPT = `请对这张图片进行分类。你必须从以下8个类别中选择一个：
@@ -134,6 +197,11 @@ function showTab(tabName) {
         loadCacheStats();
         loadCategoryDistribution();
     }
+    
+    // 如果切换到地理位置页，加载位置统计
+    if (tabName === 'location') {
+        loadLocationStats();
+    }
 }
 
 // 检查系统状态
@@ -187,7 +255,7 @@ async function checkSystemStatus() {
 // 加载今日统计
 async function loadTodayStats() {
     try {
-        const response = await fetch(`${currentConfig.apiUrl}/api/v1/stats/today`);
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/stats/today`);
         const result = await response.json();
         const data = result.data;
         
@@ -237,7 +305,7 @@ async function loadTodayStats() {
 // 加载缓存统计
 async function loadCacheStats() {
     try {
-        const response = await fetch(`${currentConfig.apiUrl}/api/v1/stats/cache-efficiency`);
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/stats/cache-efficiency`);
         const result = await response.json();
         const data = result.data;
         
@@ -287,7 +355,7 @@ async function loadCacheStats() {
 // 加载分类分布
 async function loadCategoryDistribution() {
     try {
-        const response = await fetch(`${currentConfig.apiUrl}/api/v1/stats/category-distribution`);
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/stats/category-distribution`);
         const result = await response.json();
         const data = result.data;
         
@@ -510,4 +578,305 @@ function formatNumber(num) {
 function formatPercent(num) {
     return num ? num.toFixed(2) + '%' : '0%';
 }
+
+// ==================== 地理位置功能 ====================
+
+// 加载位置数据库统计
+async function loadLocationStats() {
+    try {
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/location/stats`);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const stats = await response.json();
+        
+        document.getElementById('location-stats').innerHTML = `
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon">🏙️</div>
+                    <div class="stat-value">${formatNumber(stats.total_cities)}</div>
+                    <div class="stat-label">总城市数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🀄</div>
+                    <div class="stat-value">${formatNumber(stats.cities_with_chinese)}</div>
+                    <div class="stat-label">有中文名称</div>
+                    <div class="stat-trend" style="color: #28a745;">覆盖率: ${stats.chinese_coverage_percent}%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">👥</div>
+                    <div class="stat-value">${formatNumber(stats.cities_above_100k)}</div>
+                    <div class="stat-label">人口≥10万</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">✅</div>
+                    <div class="stat-value">${formatNumber(stats.cities_queryable)}</div>
+                    <div class="stat-label">可查询城市</div>
+                    <div class="stat-trend" style="color: #667eea;">人口≥10万且有中文</div>
+                </div>
+            </div>
+            
+            <h3 style="margin-top: 25px; margin-bottom: 15px; color: #333;">📊 调用统计</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon">📍</div>
+                    <div class="stat-value">${formatNumber(stats.total_queries_today)}</div>
+                    <div class="stat-label">今日查询总数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🎯</div>
+                    <div class="stat-value">${formatNumber(stats.nearest_queries_today)}</div>
+                    <div class="stat-label">最近城市查询</div>
+                    <div class="stat-trend" style="color: #667eea;">今日</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🗺️</div>
+                    <div class="stat-value">${formatNumber(stats.nearby_queries_today)}</div>
+                    <div class="stat-label">附近城市查询</div>
+                    <div class="stat-trend" style="color: #667eea;">今日</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">📈</div>
+                    <div class="stat-value">${formatNumber(stats.total_queries_all)}</div>
+                    <div class="stat-label">累计查询总数</div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 15px; padding: 12px; background: #f8f9fa; border-radius: 8px; font-size: 0.9rem; color: #666;">
+                <strong>说明：</strong>API接口只返回人口≥10万且有中文名称的城市，确保所有结果都有中文显示。
+                当前可查询 <strong style="color: #667eea;">${formatNumber(stats.cities_queryable)}</strong> 个城市，
+                覆盖率 <strong style="color: #28a745;">${stats.queryable_coverage_percent}%</strong>。
+            </div>
+        `;
+    } catch (error) {
+        document.getElementById('location-stats').innerHTML = `
+            <div class="alert alert-error">❌ 加载统计信息失败: ${error.message}</div>
+        `;
+    }
+}
+
+// 设置坐标到输入框
+function setCoordinates(lat, lng) {
+    document.getElementById('nearest-latitude').value = lat;
+    document.getElementById('nearest-longitude').value = lng;
+    document.getElementById('nearby-latitude').value = lat;
+    document.getElementById('nearby-longitude').value = lng;
+}
+
+// 查询最近的城市
+async function queryNearestCity() {
+    const latitude = parseFloat(document.getElementById('nearest-latitude').value);
+    const longitude = parseFloat(document.getElementById('nearest-longitude').value);
+    
+    if (isNaN(latitude) || isNaN(longitude)) {
+        document.getElementById('nearest-city-result').innerHTML = `
+            <div class="alert alert-error">❌ 请输入有效的经纬度</div>
+        `;
+        return;
+    }
+    
+    if (latitude < -90 || latitude > 90) {
+        document.getElementById('nearest-city-result').innerHTML = `
+            <div class="alert alert-error">❌ 纬度必须在 -90 到 90 之间</div>
+        `;
+        return;
+    }
+    
+    if (longitude < -180 || longitude > 180) {
+        document.getElementById('nearest-city-result').innerHTML = `
+            <div class="alert alert-error">❌ 经度必须在 -180 到 180 之间</div>
+        `;
+        return;
+    }
+    
+    document.getElementById('nearest-city-result').innerHTML = `
+        <div class="loading">
+            <div class="spinner"></div>
+            <p>查询中...</p>
+        </div>
+    `;
+    
+    try {
+        const response = await fetch(
+            `${currentConfig.apiUrl}/api/v1/location/nearest-city?latitude=${latitude}&longitude=${longitude}`
+        );
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const city = await response.json();
+        
+        document.getElementById('nearest-city-result').innerHTML = `
+            <div class="result-box" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                <h3 style="color: white; border-bottom-color: rgba(255,255,255,0.3);">🏙️ ${city.name_zh || city.name}</h3>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
+                    <div style="background: rgba(255,255,255,0.1); padding: 12px; border-radius: 8px;">
+                        <div style="font-size: 0.9rem; opacity: 0.8;">中文名</div>
+                        <div style="font-size: 1.2rem; font-weight: bold;">${city.name_zh || city.name}</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.1); padding: 12px; border-radius: 8px;">
+                        <div style="font-size: 0.9rem; opacity: 0.8;">英文名</div>
+                        <div style="font-size: 1.2rem; font-weight: bold;">${city.name}</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.1); padding: 12px; border-radius: 8px;">
+                        <div style="font-size: 0.9rem; opacity: 0.8;">距离</div>
+                        <div style="font-size: 1.2rem; font-weight: bold; color: #ffd700;">📏 ${city.distance_km.toFixed(2)} km</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.1); padding: 12px; border-radius: 8px;">
+                        <div style="font-size: 0.9rem; opacity: 0.8;">人口</div>
+                        <div style="font-size: 1.2rem; font-weight: bold;">👥 ${formatNumber(city.population)}</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.1); padding: 12px; border-radius: 8px;">
+                        <div style="font-size: 0.9rem; opacity: 0.8;">纬度</div>
+                        <div style="font-size: 1.1rem;">${city.latitude.toFixed(6)}°</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.1); padding: 12px; border-radius: 8px;">
+                        <div style="font-size: 0.9rem; opacity: 0.8;">经度</div>
+                        <div style="font-size: 1.1rem;">${city.longitude.toFixed(6)}°</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.1); padding: 12px; border-radius: 8px;">
+                        <div style="font-size: 0.9rem; opacity: 0.8;">国家代码</div>
+                        <div style="font-size: 1.1rem;">${city.country_code}</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.1); padding: 12px; border-radius: 8px;">
+                        <div style="font-size: 0.9rem; opacity: 0.8;">GeoName ID</div>
+                        <div style="font-size: 1.1rem;">${city.geoname_id}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+    } catch (error) {
+        document.getElementById('nearest-city-result').innerHTML = `
+            <div class="alert alert-error">❌ 查询失败: ${error.message}</div>
+        `;
+    }
+}
+
+// 查询附近城市列表
+async function queryNearbyCities() {
+    const latitude = parseFloat(document.getElementById('nearby-latitude').value);
+    const longitude = parseFloat(document.getElementById('nearby-longitude').value);
+    const limit = parseInt(document.getElementById('nearby-limit').value) || 10;
+    const maxDistance = document.getElementById('nearby-max-distance').value;
+    
+    if (isNaN(latitude) || isNaN(longitude)) {
+        document.getElementById('nearby-cities-result').innerHTML = `
+            <div class="alert alert-error">❌ 请输入有效的经纬度</div>
+        `;
+        return;
+    }
+    
+    if (latitude < -90 || latitude > 90) {
+        document.getElementById('nearby-cities-result').innerHTML = `
+            <div class="alert alert-error">❌ 纬度必须在 -90 到 90 之间</div>
+        `;
+        return;
+    }
+    
+    if (longitude < -180 || longitude > 180) {
+        document.getElementById('nearby-cities-result').innerHTML = `
+            <div class="alert alert-error">❌ 经度必须在 -180 到 180 之间</div>
+        `;
+        return;
+    }
+    
+    document.getElementById('nearby-cities-result').innerHTML = `
+        <div class="loading">
+            <div class="spinner"></div>
+            <p>查询中...</p>
+        </div>
+    `;
+    
+    try {
+        let url = `${currentConfig.apiUrl}/api/v1/location/nearby-cities?latitude=${latitude}&longitude=${longitude}&limit=${limit}`;
+        if (maxDistance && maxDistance.trim() !== '') {
+            url += `&max_distance_km=${parseFloat(maxDistance)}`;
+        }
+        
+        const response = await fetch(url);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const cities = await response.json();
+        
+        if (!cities || cities.length === 0) {
+            document.getElementById('nearby-cities-result').innerHTML = `
+                <div class="alert alert-warning">⚠️ 未找到附近的城市</div>
+            `;
+            return;
+        }
+        
+        let html = `
+            <div class="result-box">
+                <h3>找到 ${cities.length} 个城市</h3>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; margin-top: 15px; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">
+                                <th style="padding: 12px; text-align: left;">#</th>
+                                <th style="padding: 12px; text-align: left;">中文名称</th>
+                                <th style="padding: 12px; text-align: left;">英文名称</th>
+                                <th style="padding: 12px; text-align: right;">距离(km)</th>
+                                <th style="padding: 12px; text-align: right;">人口</th>
+                                <th style="padding: 12px; text-align: center;">坐标</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        `;
+        
+        cities.forEach((city, index) => {
+            const displayName = city.name_zh || city.name;
+            html += `
+                <tr style="border-bottom: 1px solid #dee2e6;">
+                    <td style="padding: 12px;">${index + 1}</td>
+                    <td style="padding: 12px; font-weight: bold;">${displayName}</td>
+                    <td style="padding: 12px; color: #666;">${city.name}</td>
+                    <td style="padding: 12px; text-align: right; color: #667eea; font-weight: bold;">${city.distance_km.toFixed(2)}</td>
+                    <td style="padding: 12px; text-align: right;">${formatNumber(city.population)}</td>
+                    <td style="padding: 12px; text-align: center; font-size: 0.9rem; color: #666;">
+                        ${city.latitude.toFixed(4)}°, ${city.longitude.toFixed(4)}°
+                    </td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+        
+        document.getElementById('nearby-cities-result').innerHTML = html;
+    } catch (error) {
+        document.getElementById('nearby-cities-result').innerHTML = `
+            <div class="alert alert-error">❌ 查询失败: ${error.message}</div>
+        `;
+    }
+}
+
+// ==================== 页面初始化 ====================
+
+// 页面加载时执行
+window.addEventListener('DOMContentLoaded', () => {
+    // 检查认证状态
+    if (!checkAuth()) {
+        return;
+    }
+    
+    // 显示用户信息
+    const username = localStorage.getItem(USERNAME_KEY) || 'Admin';
+    document.getElementById('user-info').textContent = `👤 ${username}`;
+    
+    // 加载配置
+    loadConfig();
+    
+    // 检查系统状态
+    checkSystemStatus();
+});
 

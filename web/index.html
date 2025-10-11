@@ -398,7 +398,18 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1><img src="/static/imageclassify.png" alt="logo" style="width: 50px; height: 50px; vertical-align: middle; margin-right: 10px;">芯图相册后端管理系统</h1>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <div style="flex: 1;"></div>
+                <h1 style="margin: 0; flex: 2; text-align: center;">
+                    <img src="/static/imageclassify.png" alt="logo" style="width: 50px; height: 50px; vertical-align: middle; margin-right: 10px;">芯图相册后端管理系统
+                </h1>
+                <div style="flex: 1; text-align: right;">
+                    <span id="user-info" style="margin-right: 15px; font-size: 0.9rem; opacity: 0.9;"></span>
+                    <button onclick="logout()" style="padding: 8px 20px; background: rgba(255,255,255,0.2); border: 2px solid white; border-radius: 6px; color: white; cursor: pointer; font-size: 0.9rem; font-weight: 500;">
+                        🚪 退出登录
+                    </button>
+                </div>
+            </div>
             <p>基于大模型的智能图片分类服务</p>
         </div>
 
@@ -417,6 +428,7 @@
         <div class="tabs">
             <button class="tab-button active" onclick="showTab('stats')">📊 统计数据</button>
             <button class="tab-button" onclick="showTab('test')">🧪 分类测试</button>
+            <button class="tab-button" onclick="showTab('location')">📍 地理位置</button>
             <button class="tab-button" onclick="showTab('config')">⚙️ 配置管理</button>
         </div>
 
@@ -481,6 +493,73 @@
                 </div>
 
                 <div id="test-alert"></div>
+            </div>
+        </div>
+
+        <!-- 地理位置测试标签页 -->
+        <div id="location-tab" class="tab-content">
+            <div class="card">
+                <h2>📊 位置数据库统计</h2>
+                <div id="location-stats">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>📍 最近城市查询</h2>
+                <div class="form-group">
+                    <label for="nearest-latitude">纬度 (Latitude)</label>
+                    <input type="number" id="nearest-latitude" step="0.000001" min="-90" max="90" placeholder="例如：39.9042" value="39.9042">
+                    <small style="color: #666;">范围：-90 到 90</small>
+                </div>
+                <div class="form-group">
+                    <label for="nearest-longitude">经度 (Longitude)</label>
+                    <input type="number" id="nearest-longitude" step="0.000001" min="-180" max="180" placeholder="例如：116.4074" value="116.4074">
+                    <small style="color: #666;">范围：-180 到 180</small>
+                </div>
+                <button class="btn btn-primary" onclick="queryNearestCity()">🔍 查询最近城市</button>
+                
+                <div id="nearest-city-result" style="margin-top: 20px;"></div>
+            </div>
+
+            <div class="card">
+                <h2>📍 附近城市列表</h2>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                    <div class="form-group">
+                        <label for="nearby-latitude">纬度 (Latitude)</label>
+                        <input type="number" id="nearby-latitude" step="0.000001" min="-90" max="90" placeholder="例如：39.9042" value="39.9042">
+                    </div>
+                    <div class="form-group">
+                        <label for="nearby-longitude">经度 (Longitude)</label>
+                        <input type="number" id="nearby-longitude" step="0.000001" min="-180" max="180" placeholder="例如：116.4074" value="116.4074">
+                    </div>
+                    <div class="form-group">
+                        <label for="nearby-limit">返回数量</label>
+                        <input type="number" id="nearby-limit" min="1" max="100" value="10" placeholder="1-100">
+                    </div>
+                    <div class="form-group">
+                        <label for="nearby-max-distance">最大距离(公里，可选)</label>
+                        <input type="number" id="nearby-max-distance" min="0" step="0.1" placeholder="留空表示不限制">
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="queryNearbyCities()">🔍 查询附近城市</button>
+                
+                <div id="nearby-cities-result" style="margin-top: 20px;"></div>
+            </div>
+
+            <div class="card">
+                <h2>💡 常用城市坐标参考</h2>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+                    <button class="btn" onclick="setCoordinates(39.9042, 116.4074)" style="background: #28a745; color: white;">📍 北京</button>
+                    <button class="btn" onclick="setCoordinates(31.2304, 121.4737)" style="background: #28a745; color: white;">📍 上海</button>
+                    <button class="btn" onclick="setCoordinates(23.1291, 113.2644)" style="background: #28a745; color: white;">📍 广州</button>
+                    <button class="btn" onclick="setCoordinates(22.5431, 114.0579)" style="background: #28a745; color: white;">📍 深圳</button>
+                    <button class="btn" onclick="setCoordinates(30.5728, 104.0668)" style="background: #28a745; color: white;">📍 成都</button>
+                    <button class="btn" onclick="setCoordinates(30.5872, 114.2881)" style="background: #28a745; color: white;">📍 武汉</button>
+                </div>
             </div>
         </div>
 
