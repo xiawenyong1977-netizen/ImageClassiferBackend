@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     LLM_MAX_TOKENS: int = Field(default=500, description="最大token数")
     LLM_TIMEOUT: int = Field(default=30, description="请求超时(秒)")
     
+    # ===== 本地推理配置 =====
+    USE_LOCAL_INFERENCE: bool = Field(default=False, description="是否使用本地推理（开启后不调用大模型）")
+    LOCAL_INFERENCE_FALLBACK: bool = Field(default=True, description="大模型失败时是否降级到本地推理")
+    
     # ===== 应用配置 =====
     APP_HOST: str = Field(default="0.0.0.0", description="应用主机")
     APP_PORT: int = Field(default=8000, description="应用端口")

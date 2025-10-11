@@ -20,9 +20,10 @@ class CheckCacheRequest(BaseModel):
 
 class ClassificationData(BaseModel):
     """分类结果数据"""
-    category: str = Field(..., description="分类类别Key")
+    category: str = Field(..., description="分类类别Key（使用本地推理时为空，需客户端映射）")
     confidence: float = Field(..., description="置信度", ge=0, le=1)
     description: Optional[str] = Field(None, description="图片描述")
+    local_inference_result: Optional[dict] = Field(None, description="本地推理原始结果（如果使用本地推理）")
 
 
 class ClassificationResponse(BaseModel):

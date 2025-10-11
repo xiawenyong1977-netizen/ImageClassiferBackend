@@ -4,6 +4,9 @@ const TOKEN_KEY = 'admin_token';
 const TOKEN_EXPIRES_KEY = 'token_expires';
 const USERNAME_KEY = 'admin_username';
 
+// ImageNet类别映射（延迟加载）
+let imagenetClasses = null;
+
 // 认证相关函数
 function getAuthToken() {
     return localStorage.getItem(TOKEN_KEY);
@@ -129,13 +132,31 @@ const categoryNameMap = {
     }
 };
 
-// 页面加载完成
+// 页面加载完成（主初始化）
 document.addEventListener('DOMContentLoaded', function() {
+    // 检查认证状态
+    if (!checkAuth()) {
+        return;
+    }
+    
+    // 显示用户信息
+    const username = localStorage.getItem(USERNAME_KEY) || 'Admin';
+    document.getElementById('user-info').textContent = `👤 ${username}`;
+    
+    // 加载配置
     loadConfig();
+    
+    // 加载推理配置
+    loadInferenceConfig();
+    
+    // 检查系统状态
     checkSystemStatus();
+    
+    // 加载统计数据
     loadTodayStats();
     loadCacheStats();
     loadCategoryDistribution();
+    loadInferenceMethodStats();
     
     // 自动刷新统计（每30秒）
     setInterval(() => {
@@ -143,36 +164,39 @@ document.addEventListener('DOMContentLoaded', function() {
             loadTodayStats();
             loadCacheStats();
             loadCategoryDistribution();
+            loadInferenceMethodStats();
         }
     }, 30000);
     
-    // 文件上传处理
+    // 文件上传处理（只设置一次）
     const uploadArea = document.getElementById('upload-area');
     const fileInput = document.getElementById('file-input');
     
-    uploadArea.addEventListener('click', () => fileInput.click());
-    
-    fileInput.addEventListener('change', handleFileSelect);
-    
-    // 拖拽上传
-    uploadArea.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        uploadArea.classList.add('dragover');
-    });
-    
-    uploadArea.addEventListener('dragleave', () => {
-        uploadArea.classList.remove('dragover');
-    });
-    
-    uploadArea.addEventListener('drop', (e) => {
-        e.preventDefault();
-        uploadArea.classList.remove('dragover');
+    if (uploadArea && fileInput) {
+        uploadArea.addEventListener('click', () => fileInput.click());
         
-        if (e.dataTransfer.files.length > 0) {
-            fileInput.files = e.dataTransfer.files;
-            handleFileSelect();
-        }
-    });
+        fileInput.addEventListener('change', handleFileSelect);
+        
+        // 拖拽上传
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            
+            if (e.dataTransfer.files.length > 0) {
+                fileInput.files = e.dataTransfer.files;
+                handleFileSelect();
+            }
+        });
+    }
 });
 
 // 标签页切换
@@ -196,6 +220,7 @@ function showTab(tabName) {
         loadTodayStats();
         loadCacheStats();
         loadCategoryDistribution();
+        loadInferenceMethodStats();
     }
     
     // 如果切换到地理位置页，加载位置统计
@@ -534,11 +559,13 @@ function saveConfig() {
         llmProvider: document.getElementById('llm-provider').value,
         llmApiKey: document.getElementById('llm-api-key').value,
         llmModel: document.getElementById('llm-model').value,
-        prompt: document.getElementById('prompt-config').value
+        prompt: document.getElementById('prompt-config').value,
+        useLocalInference: document.getElementById('use-local-inference').checked,
+        localInferenceFallback: document.getElementById('local-inference-fallback').checked
     };
     
     localStorage.setItem(CONFIG_KEY, JSON.stringify(currentConfig));
-    showAlert('config-alert', '✅ 配置已保存到浏览器本地存储（提示词需要在服务器.env中配置才能生效）', 'success');
+    showAlert('config-alert', '✅ 配置已保存到浏览器本地存储（服务器端设置需要在.env中配置才能生效）', 'success');
     
     // 刷新系统状态
     checkSystemStatus();
@@ -561,6 +588,8 @@ function loadConfig() {
     document.getElementById('llm-api-key').value = currentConfig.llmApiKey;
     document.getElementById('llm-model').value = currentConfig.llmModel;
     document.getElementById('prompt-config').value = currentConfig.prompt;
+    document.getElementById('use-local-inference').checked = currentConfig.useLocalInference || false;
+    document.getElementById('local-inference-fallback').checked = currentConfig.localInferenceFallback !== false; // 默认true
 }
 
 // 重置提示词为默认值
@@ -569,9 +598,164 @@ function resetPrompt() {
     showAlert('config-alert', '✅ 提示词已恢复为默认值', 'info');
 }
 
+// ==================== 推理配置管理 ====================
+
+// 加载推理配置
+async function loadInferenceConfig() {
+    try {
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/config/inference`);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP错误: ${response.status}`);
+        }
+        
+        const config = await response.json();
+        
+        // 更新界面
+        document.getElementById('use-local-inference').checked = config.use_local_inference;
+        document.getElementById('local-inference-fallback').checked = config.local_inference_fallback;
+        
+        showInferenceAlert('✅ 配置已刷新', 'success');
+        
+    } catch (error) {
+        showInferenceAlert(`❌ 加载配置失败: ${error.message}`, 'error');
+    }
+}
+
+// 更新推理配置
+async function updateInferenceConfig() {
+    try {
+        const useLocal = document.getElementById('use-local-inference').checked;
+        const fallback = document.getElementById('local-inference-fallback').checked;
+        
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/config/inference`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                use_local_inference: useLocal,
+                local_inference_fallback: fallback
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP错误: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        
+        showInferenceAlert(
+            `✅ 配置已更新并立即生效！<br>
+            🤖 本地推理: ${result.use_local_inference ? '<strong style="color: #28a745;">已开启</strong>' : '关闭'}<br>
+            🛡️ 降级策略: ${result.local_inference_fallback ? '<strong style="color: #28a745;">已开启</strong>' : '关闭'}`,
+            'success'
+        );
+        
+    } catch (error) {
+        showInferenceAlert(`❌ 更新配置失败: ${error.message}`, 'error');
+    }
+}
+
+// 显示推理配置提示
+function showInferenceAlert(message, type = 'info') {
+    const alertDiv = document.getElementById('inference-config-alert');
+    const bgColor = type === 'success' ? '#d4edda' : type === 'error' ? '#f8d7da' : '#d1ecf1';
+    const textColor = type === 'success' ? '#155724' : type === 'error' ? '#721c24' : '#0c5460';
+    const borderColor = type === 'success' ? '#c3e6cb' : type === 'error' ? '#f5c6cb' : '#bee5eb';
+    
+    alertDiv.innerHTML = `
+        <div style="padding: 12px; background: ${bgColor}; color: ${textColor}; border: 1px solid ${borderColor}; border-radius: 8px;">
+            ${message}
+        </div>
+    `;
+    
+    // 3秒后自动消失
+    setTimeout(() => {
+        alertDiv.innerHTML = '';
+    }, 5000);
+}
+
 // 格式化数字
 function formatNumber(num) {
     return num ? num.toLocaleString('zh-CN') : 0;
+}
+
+// 加载推理方式统计
+async function loadInferenceMethodStats() {
+    try {
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/stats/inference-method`);
+        const data = await response.json();
+        const stats = data.data;
+        
+        const total = stats.total_requests || 0;
+        const fromCache = stats.from_cache || 0;
+        const llmSuccess = stats.llm_success || 0;
+        const localDirect = stats.local_direct || 0;
+        const localFallback = stats.local_fallback_success || 0;
+        const localTest = stats.local_test || 0;
+        const llmFail = stats.llm_fail_count || 0;
+        const localTotal = stats.local_total || 0;
+        
+        document.getElementById('inference-method-stats').innerHTML = `
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon">📊</div>
+                    <div class="stat-value">${formatNumber(total)}</div>
+                    <div class="stat-label">今日总请求</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">💾</div>
+                    <div class="stat-value">${formatNumber(fromCache)}</div>
+                    <div class="stat-label">缓存命中</div>
+                    <div class="stat-trend" style="color: #28a745;">${total > 0 ? ((fromCache/total*100).toFixed(1)) : 0}%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🌐</div>
+                    <div class="stat-value">${formatNumber(llmSuccess)}</div>
+                    <div class="stat-label">大模型调用成功</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🤖</div>
+                    <div class="stat-value">${formatNumber(localTotal)}</div>
+                    <div class="stat-label">本地推理总次数</div>
+                    <div class="stat-trend" style="color: #667eea;">直接: ${localDirect} | 降级: ${localFallback} | 测试: ${localTest}</div>
+                </div>
+            </div>
+            
+            <div class="stats-grid" style="margin-top: 20px;">
+                <div class="stat-card" style="border-left: 4px solid #dc3545;">
+                    <div class="stat-icon">❌</div>
+                    <div class="stat-value">${formatNumber(llmFail)}</div>
+                    <div class="stat-label">大模型调用失败</div>
+                    <div class="stat-trend" style="color: #dc3545;">已降级到本地推理</div>
+                </div>
+                <div class="stat-card" style="border-left: 4px solid #28a745;">
+                    <div class="stat-icon">✅</div>
+                    <div class="stat-value">${formatNumber(localFallback)}</div>
+                    <div class="stat-label">本地推理降级成功</div>
+                    <div class="stat-trend" style="color: #28a745;">保障服务可用性</div>
+                </div>
+                <div class="stat-card" style="border-left: 4px solid #667eea;">
+                    <div class="stat-icon">⚡</div>
+                    <div class="stat-value">${formatNumber(localDirect)}</div>
+                    <div class="stat-label">本地推理直接调用</div>
+                    <div class="stat-trend" style="color: #667eea;">开关开启</div>
+                </div>
+                <div class="stat-card" style="border-left: 4px solid #17a2b8;">
+                    <div class="stat-icon">🧪</div>
+                    <div class="stat-value">${formatNumber(localTest)}</div>
+                    <div class="stat-label">本地模型测试</div>
+                    <div class="stat-trend" style="color: #17a2b8;">管理后台测试</div>
+                </div>
+            </div>
+        `;
+        
+    } catch (error) {
+        document.getElementById('inference-method-stats').innerHTML = `
+            <div class="alert alert-error">加载失败: ${error.message}</div>
+        `;
+    }
 }
 
 // 格式化百分比
@@ -860,41 +1044,85 @@ async function queryNearbyCities() {
     }
 }
 
-// ==================== 本地模型测试 ====================
+// ==================== ImageNet类别映射 ====================
 
-// 预览本地测试图片
-function previewLocalTestImage(event) {
-    const file = event.target.files[0];
+// 加载ImageNet类别映射
+async function loadImageNetClasses() {
+    if (imagenetClasses) {
+        return imagenetClasses;
+    }
+    
+    try {
+        const response = await fetch('/static/imagenet_classes.json');
+        imagenetClasses = await response.json();
+        return imagenetClasses;
+    } catch (error) {
+        console.error('加载ImageNet类别映射失败:', error);
+        return {};
+    }
+}
+
+// 获取ImageNet类别名称
+function getImageNetClassName(classId) {
+    if (!imagenetClasses) {
+        return `imagenet_class_${classId}`;
+    }
+    return imagenetClasses[classId.toString()] || `imagenet_class_${classId}`;
+}
+
+// ==================== 分类测试功能 ====================
+
+// 全局变量
+let selectedFile = null;
+
+// 处理文件选择
+function handleFileSelect() {
+    const fileInput = document.getElementById('file-input');
+    const file = fileInput.files[0];
     if (file) {
+        selectedFile = file;
         const reader = new FileReader();
-        reader.onload = function(e) {
-            document.getElementById('local-preview-img').src = e.target.result;
-            document.getElementById('local-image-preview').style.display = 'block';
+        reader.onload = (e) => {
+            document.getElementById('preview-image').src = e.target.result;
+            document.getElementById('upload-area').classList.add('hidden');
+            document.getElementById('preview-area').classList.remove('hidden');
+            document.getElementById('result-area').classList.add('hidden');
         };
         reader.readAsDataURL(file);
     }
 }
 
-// 测试本地模型
-async function testLocalModel() {
-    const fileInput = document.getElementById('local-test-image');
-    const resultDiv = document.getElementById('local-test-result');
-    
-    if (!fileInput.files || !fileInput.files[0]) {
-        resultDiv.innerHTML = `<div class="alert alert-error">❌ 请先选择图片</div>`;
+// 重置上传
+function resetUpload() {
+    selectedFile = null;
+    document.getElementById('file-input').value = '';
+    document.getElementById('upload-area').classList.remove('hidden');
+    document.getElementById('preview-area').classList.add('hidden');
+    document.getElementById('result-area').classList.add('hidden');
+}
+
+// 分类图片
+async function classifyImage() {
+    if (!selectedFile) {
+        showAlert('test-alert', '❌ 请先选择图片', 'error');
         return;
     }
     
-    const file = fileInput.files[0];
+    const formData = new FormData();
+    formData.append('image', selectedFile);
     
-    resultDiv.innerHTML = `<div class="alert" style="background: #e3f2fd; color: #1976d2; border: 1px solid #90caf9;">⏳ 正在推理，请稍候...</div>`;
+    // 显示加载状态
+    document.getElementById('classification-result').innerHTML = `
+        <div style="padding: 20px; text-align: center;">
+            <div class="spinner" style="margin: 0 auto 15px;"></div>
+            <p>正在分类，请稍候...</p>
+        </div>
+    `;
+    document.getElementById('result-area').classList.remove('hidden');
     
     try {
-        const formData = new FormData();
-        formData.append('image', file);
-        
         const startTime = Date.now();
-        const response = await fetch(`${currentConfig.apiUrl}/api/v1/local-classify/detailed`, {
+        const response = await fetch(`${currentConfig.apiUrl}/api/v1/classify`, {
             method: 'POST',
             body: formData
         });
@@ -902,7 +1130,7 @@ async function testLocalModel() {
         
         if (!response.ok) {
             const errorData = await response.json();
-            throw new Error(errorData.detail || '请求失败');
+            throw new Error(errorData.detail || '分类失败');
         }
         
         const result = await response.json();
@@ -910,125 +1138,108 @@ async function testLocalModel() {
         // 显示结果
         let html = `
             <div class="alert" style="background: #d4edda; color: #155724; border: 1px solid #c3e6cb; margin-bottom: 20px;">
-                ✅ 推理成功！耗时: ${processingTime}ms
+                ✅ 分类成功！耗时: ${processingTime}ms
             </div>
             
-            <h3 style="margin-top: 20px; color: #667eea;">📊 推理结果</h3>
-            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-                <p><strong>成功状态:</strong> ${result.success ? '✅ 成功' : '❌ 失败'}</p>
-                <p><strong>消息:</strong> ${result.message}</p>
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+                <h3 style="margin: 0 0 15px 0; color: #667eea;">📊 分类结果</h3>
+                <p><strong>分类:</strong> <span style="color: #667eea; font-size: 1.2em;">${result.data.category}</span></p>
+                <p><strong>置信度:</strong> ${(result.data.confidence * 100).toFixed(1)}%</p>
+                <p><strong>描述:</strong> ${result.data.description || '无'}</p>
+                <p><strong>来源:</strong> ${result.from_cache ? '💾 缓存' : '🔄 实时推理'}</p>
             </div>
         `;
         
-        // ID卡检测结果
-        if (result.details && result.details.idCardDetections) {
-            html += `
-                <h3 style="margin-top: 20px; color: #667eea;">🆔 ID卡检测结果</h3>
-                <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-            `;
-            
-            if (result.details.idCardDetections.length > 0) {
-                html += `<p><strong>检测到 ${result.details.idCardDetections.length} 个身份证:</strong></p><ul style="margin-left: 20px;">`;
-                result.details.idCardDetections.forEach(det => {
-                    html += `
-                        <li>
-                            <strong>${det.className}</strong> 
-                            - 置信度: ${(det.confidence * 100).toFixed(1)}%
-                            - 位置: [${det.bbox.map(v => v.toFixed(0)).join(', ')}]
-                        </li>
-                    `;
-                });
-                html += `</ul>`;
-            } else {
-                html += `<p>未检测到身份证</p>`;
-            }
-            html += `</div>`;
+        // 如果使用了本地推理，显示详细检测结果
+        if (result.data.local_inference_result) {
+            html += await displayLocalInferenceDetails(result.data.local_inference_result);
         }
         
-        // YOLO通用检测结果
-        if (result.details && result.details.generalDetections) {
-            html += `
-                <h3 style="margin-top: 20px; color: #667eea;">🔍 YOLO通用检测结果</h3>
-                <div style="background: #d1ecf1; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-            `;
-            
-            if (result.details.generalDetections.length > 0) {
-                html += `<p><strong>检测到 ${result.details.generalDetections.length} 个物体:</strong></p><ul style="margin-left: 20px;">`;
-                result.details.generalDetections.slice(0, 10).forEach(det => {
-                    html += `
-                        <li>
-                            <strong>${det.className}</strong> 
-                            - 置信度: ${(det.confidence * 100).toFixed(1)}%
-                            - 位置: [${det.bbox.map(v => v.toFixed(0)).join(', ')}]
-                        </li>
-                    `;
-                });
-                if (result.details.generalDetections.length > 10) {
-                    html += `<li>... 还有 ${result.details.generalDetections.length - 10} 个检测结果</li>`;
-                }
-                html += `</ul>`;
-            } else {
-                html += `<p>未检测到物体</p>`;
-            }
-            html += `</div>`;
-        }
-        
-        // MobileNetV3分类结果
-        if (result.details && result.details.mobileNetV3Detections && result.details.mobileNetV3Detections.predictions) {
-            html += `
-                <h3 style="margin-top: 20px; color: #667eea;">🧠 MobileNetV3分类结果 (Top-5)</h3>
-                <div style="background: #e7e7ff; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-                    <ul style="margin-left: 20px;">
-            `;
-            
-            result.details.mobileNetV3Detections.predictions.forEach((pred, index) => {
-                html += `
-                    <li>
-                        <strong>#${index + 1}</strong>: ${pred.class} 
-                        - 概率: ${(pred.probability * 100).toFixed(1)}%
-                    </li>
-                `;
-            });
-            html += `</ul></div>`;
-        }
-        
-        // 原始JSON数据（可折叠）
+        // 原始JSON
         html += `
-            <h3 style="margin-top: 20px; color: #667eea;">📝 原始JSON数据</h3>
-            <details style="margin-top: 10px;">
-                <summary style="cursor: pointer; padding: 10px; background: #f8f9fa; border-radius: 8px;">点击展开查看完整JSON</summary>
+            <details style="margin-top: 20px;">
+                <summary style="cursor: pointer; padding: 10px; background: #f8f9fa; border-radius: 8px;">查看完整JSON</summary>
                 <pre style="background: #f5f5f5; padding: 15px; border-radius: 8px; overflow-x: auto; margin-top: 10px; font-size: 0.85rem;">${JSON.stringify(result, null, 2)}</pre>
             </details>
         `;
         
-        resultDiv.innerHTML = html;
+        document.getElementById('classification-result').innerHTML = html;
         
     } catch (error) {
-        resultDiv.innerHTML = `
+        document.getElementById('classification-result').innerHTML = `
             <div class="alert alert-error">
-                ❌ 推理失败: ${error.message}
+                ❌ 分类失败: ${error.message}
             </div>
         `;
     }
 }
 
-// ==================== 页面初始化 ====================
-
-// 页面加载时执行
-window.addEventListener('DOMContentLoaded', () => {
-    // 检查认证状态
-    if (!checkAuth()) {
-        return;
+// 显示本地推理详细结果（当返回结果中包含local_inference_result时）
+async function displayLocalInferenceDetails(localResult) {
+    if (!localResult) return '';
+    
+    // 加载ImageNet类别映射
+    await loadImageNetClasses();
+    
+    let html = `
+        <h3 style="margin-top: 20px; color: #667eea;">🤖 本地推理详细结果</h3>
+    `;
+    
+    // ID卡检测结果
+    if (localResult.idCardDetections && localResult.idCardDetections.length > 0) {
+        html += `
+            <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                <h4 style="margin: 0 0 10px 0;">🆔 ID卡检测 (${localResult.idCardDetections.length}个)</h4>
+                <ul style="margin: 0; padding-left: 20px;">
+        `;
+        localResult.idCardDetections.forEach(det => {
+            html += `
+                <li>
+                    <strong>${det.className}</strong> - 置信度: ${(det.confidence * 100).toFixed(1)}%
+                </li>
+            `;
+        });
+        html += `</ul></div>`;
     }
     
-    // 显示用户信息
-    const username = localStorage.getItem(USERNAME_KEY) || 'Admin';
-    document.getElementById('user-info').textContent = `👤 ${username}`;
+    // YOLO通用检测结果
+    if (localResult.generalDetections && localResult.generalDetections.length > 0) {
+        html += `
+            <div style="background: #d1ecf1; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                <h4 style="margin: 0 0 10px 0;">🔍 YOLO检测 (${localResult.generalDetections.length}个物体)</h4>
+                <ul style="margin: 0; padding-left: 20px;">
+        `;
+        localResult.generalDetections.slice(0, 10).forEach(det => {
+            html += `
+                <li>
+                    <strong>${det.className}</strong> - 置信度: ${(det.confidence * 100).toFixed(1)}%
+                </li>
+            `;
+        });
+        if (localResult.generalDetections.length > 10) {
+            html += `<li>... 还有 ${localResult.generalDetections.length - 10} 个</li>`;
+        }
+        html += `</ul></div>`;
+    }
     
-    // 加载配置
-    loadConfig();
+    // MobileNetV3分类结果
+    if (localResult.mobileNetV3Detections && localResult.mobileNetV3Detections.predictions) {
+        html += `
+            <div style="background: #e7e7ff; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                <h4 style="margin: 0 0 10px 0;">🧠 MobileNetV3分类 (Top-5)</h4>
+                <ul style="margin: 0; padding-left: 20px;">
+        `;
+        localResult.mobileNetV3Detections.predictions.forEach((pred, index) => {
+            const className = getImageNetClassName(pred.index);
+            html += `
+                <li>
+                    <strong>#${index + 1}</strong>: ${className} - 概率: ${(pred.probability * 100).toFixed(1)}%
+                </li>
+            `;
+        });
+        html += `</ul></div>`;
+    }
     
-    // 检查系统状态
-    checkSystemStatus();
-});
+    return html;
+}
 

@@ -47,3 +47,14 @@ async def get_category_distribution(current_user: str = Depends(get_current_user
         logger.error(f"获取分类分布失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.get("/inference-method", summary="获取推理方式统计")
+async def get_inference_method_stats(current_user: str = Depends(get_current_user)):
+    """获取推理方式统计（需要认证）"""
+    try:
+        stats = await stats_service.get_inference_method_stats()
+        return {"success": True, "data": stats}
+    except Exception as e:
+        logger.error(f"获取推理方式统计失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

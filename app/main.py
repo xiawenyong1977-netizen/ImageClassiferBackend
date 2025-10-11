@@ -13,7 +13,7 @@ import os
 
 from app.config import settings
 from app.database import db
-from app.api import classify, stats, health, location, auth, local_classify
+from app.api import classify, stats, health, location, auth, local_classify, config
 
 
 # 配置日志
@@ -80,6 +80,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(classify.router)
 app.include_router(local_classify.router)  # 本地模型推理
+app.include_router(config.router)  # 运行时配置
 app.include_router(stats.router)
 app.include_router(health.router)
 app.include_router(location.router)

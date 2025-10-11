@@ -22,7 +22,8 @@ class StatsService:
         category: str,
         confidence: float,
         from_cache: bool,
-        processing_time_ms: int
+        processing_time_ms: int,
+        inference_method: str = "llm"
     ) -> bool:
         """
         记录请求日志
@@ -37,6 +38,7 @@ class StatsService:
             confidence: 置信度
             from_cache: 是否来自缓存
             processing_time_ms: 处理耗时
+            inference_method: 推理方式(llm/local/llm_fallback/local_fallback)
             
         Returns:
             是否记录成功
@@ -49,12 +51,12 @@ class StatsService:
                 sql = """
                 INSERT INTO request_log (
                     request_id, user_id, ip_address, image_hash, image_size,
-                    category, confidence, from_cache, processing_time_ms
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    category, confidence, from_cache, processing_time_ms, inference_method
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 await cursor.execute(sql, (
                     request_id, user_id, ip_address, image_hash, image_size,
-                    category, confidence, 1 if from_cache else 0, processing_time_ms
+                    category, confidence, 1 if from_cache else 0, processing_time_ms, inference_method
                 ))
                 logger.debug(f"请求日志已记录: {request_id}")
                 return True
@@ -148,6 +150,53 @@ class StatsService:
         except Exception as e:
             logger.error(f"查询分类分布失败: {e}")
             return []
+    
+    async def get_inference_method_stats(self) -> dict:
+        """
+        获取推理方式统计
+        
+        Returns:
+            推理方式统计数据
+        """
+        try:
+            async with db.get_cursor() as cursor:
+                sql = """
+                SELECT 
+                    COUNT(*) as total_requests,
+                    SUM(CASE WHEN from_cache = 1 THEN 1 ELSE 0 END) as from_cache,
+                    SUM(CASE WHEN inference_method = 'llm' THEN 1 ELSE 0 END) as llm_success,
+                    SUM(CASE WHEN inference_method = 'local' THEN 1 ELSE 0 END) as local_direct,
+                    SUM(CASE WHEN inference_method = 'llm_fallback' THEN 1 ELSE 0 END) as llm_fallback,
+                    SUM(CASE WHEN inference_method = 'local_fallback' THEN 1 ELSE 0 END) as local_fallback_success,
+                    SUM(CASE WHEN inference_method = 'local_test' THEN 1 ELSE 0 END) as local_test,
+                    SUM(CASE WHEN inference_method IN ('llm_fallback', 'local_fallback') THEN 1 ELSE 0 END) as total_fallback
+                FROM request_log
+                WHERE created_date = CURDATE()
+                """
+                await cursor.execute(sql)
+                result = await cursor.fetchone()
+                
+                if result:
+                    # 计算百分比
+                    total = result['total_requests'] or 0
+                    return {
+                        'total_requests': total,
+                        'from_cache': result['from_cache'] or 0,
+                        'llm_success': result['llm_success'] or 0,
+                        'local_direct': result['local_direct'] or 0,
+                        'llm_fallback': result['llm_fallback'] or 0,
+                        'local_fallback_success': result['local_fallback_success'] or 0,
+                        'local_test': result['local_test'] or 0,
+                        'total_fallback': result['total_fallback'] or 0,
+                        'llm_fail_count': result['local_fallback_success'] or 0,  # 大模型失败次数 = 降级到本地推理的次数
+                        'local_total': (result['local_direct'] or 0) + (result['local_fallback_success'] or 0) + (result['local_test'] or 0)  # 本地推理总次数（包含测试）
+                    }
+                
+                return {}
+                
+        except Exception as e:
+            logger.error(f"查询推理方式统计失败: {e}")
+            return {}
 
 
 # 全局统计服务实例
