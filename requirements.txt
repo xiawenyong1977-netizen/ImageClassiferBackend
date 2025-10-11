@@ -15,6 +15,15 @@ pydantic-settings==2.1.0
 # 图片处理
 Pillow==10.2.0
 
+# ONNX Runtime (本地模型推理)
+onnxruntime==1.16.3
+numpy==1.24.3
+
+# YOLO推理库（自动处理YOLO预处理和后处理）
+ultralytics==8.0.200  # 包含PyTorch依赖，自动安装torchvision
+# 注意：ultralytics会自动安装torch和torchvision，用于MobileNetV3预处理
+# opencv-python==4.8.1.78  # 可选：OpenCV DNN模块
+
 # 大模型API客户端
 dashscope>=1.14.0      # 阿里云灵积DashScope SDK
 openai==1.10.0

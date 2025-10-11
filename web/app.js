@@ -860,6 +860,158 @@ async function queryNearbyCities() {
     }
 }
 
+// ==================== 本地模型测试 ====================
+
+// 预览本地测试图片
+function previewLocalTestImage(event) {
+    const file = event.target.files[0];
+    if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            document.getElementById('local-preview-img').src = e.target.result;
+            document.getElementById('local-image-preview').style.display = 'block';
+        };
+        reader.readAsDataURL(file);
+    }
+}
+
+// 测试本地模型
+async function testLocalModel() {
+    const fileInput = document.getElementById('local-test-image');
+    const resultDiv = document.getElementById('local-test-result');
+    
+    if (!fileInput.files || !fileInput.files[0]) {
+        resultDiv.innerHTML = `<div class="alert alert-error">❌ 请先选择图片</div>`;
+        return;
+    }
+    
+    const file = fileInput.files[0];
+    
+    resultDiv.innerHTML = `<div class="alert" style="background: #e3f2fd; color: #1976d2; border: 1px solid #90caf9;">⏳ 正在推理，请稍候...</div>`;
+    
+    try {
+        const formData = new FormData();
+        formData.append('image', file);
+        
+        const startTime = Date.now();
+        const response = await fetch(`${currentConfig.apiUrl}/api/v1/local-classify/detailed`, {
+            method: 'POST',
+            body: formData
+        });
+        const processingTime = Date.now() - startTime;
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || '请求失败');
+        }
+        
+        const result = await response.json();
+        
+        // 显示结果
+        let html = `
+            <div class="alert" style="background: #d4edda; color: #155724; border: 1px solid #c3e6cb; margin-bottom: 20px;">
+                ✅ 推理成功！耗时: ${processingTime}ms
+            </div>
+            
+            <h3 style="margin-top: 20px; color: #667eea;">📊 推理结果</h3>
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                <p><strong>成功状态:</strong> ${result.success ? '✅ 成功' : '❌ 失败'}</p>
+                <p><strong>消息:</strong> ${result.message}</p>
+            </div>
+        `;
+        
+        // ID卡检测结果
+        if (result.details && result.details.idCardDetections) {
+            html += `
+                <h3 style="margin-top: 20px; color: #667eea;">🆔 ID卡检测结果</h3>
+                <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+            `;
+            
+            if (result.details.idCardDetections.length > 0) {
+                html += `<p><strong>检测到 ${result.details.idCardDetections.length} 个身份证:</strong></p><ul style="margin-left: 20px;">`;
+                result.details.idCardDetections.forEach(det => {
+                    html += `
+                        <li>
+                            <strong>${det.className}</strong> 
+                            - 置信度: ${(det.confidence * 100).toFixed(1)}%
+                            - 位置: [${det.bbox.map(v => v.toFixed(0)).join(', ')}]
+                        </li>
+                    `;
+                });
+                html += `</ul>`;
+            } else {
+                html += `<p>未检测到身份证</p>`;
+            }
+            html += `</div>`;
+        }
+        
+        // YOLO通用检测结果
+        if (result.details && result.details.generalDetections) {
+            html += `
+                <h3 style="margin-top: 20px; color: #667eea;">🔍 YOLO通用检测结果</h3>
+                <div style="background: #d1ecf1; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+            `;
+            
+            if (result.details.generalDetections.length > 0) {
+                html += `<p><strong>检测到 ${result.details.generalDetections.length} 个物体:</strong></p><ul style="margin-left: 20px;">`;
+                result.details.generalDetections.slice(0, 10).forEach(det => {
+                    html += `
+                        <li>
+                            <strong>${det.className}</strong> 
+                            - 置信度: ${(det.confidence * 100).toFixed(1)}%
+                            - 位置: [${det.bbox.map(v => v.toFixed(0)).join(', ')}]
+                        </li>
+                    `;
+                });
+                if (result.details.generalDetections.length > 10) {
+                    html += `<li>... 还有 ${result.details.generalDetections.length - 10} 个检测结果</li>`;
+                }
+                html += `</ul>`;
+            } else {
+                html += `<p>未检测到物体</p>`;
+            }
+            html += `</div>`;
+        }
+        
+        // MobileNetV3分类结果
+        if (result.details && result.details.mobileNetV3Detections && result.details.mobileNetV3Detections.predictions) {
+            html += `
+                <h3 style="margin-top: 20px; color: #667eea;">🧠 MobileNetV3分类结果 (Top-5)</h3>
+                <div style="background: #e7e7ff; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                    <ul style="margin-left: 20px;">
+            `;
+            
+            result.details.mobileNetV3Detections.predictions.forEach((pred, index) => {
+                html += `
+                    <li>
+                        <strong>#${index + 1}</strong>: ${pred.class} 
+                        - 概率: ${(pred.probability * 100).toFixed(1)}%
+                    </li>
+                `;
+            });
+            html += `</ul></div>`;
+        }
+        
+        // 原始JSON数据（可折叠）
+        html += `
+            <h3 style="margin-top: 20px; color: #667eea;">📝 原始JSON数据</h3>
+            <details style="margin-top: 10px;">
+                <summary style="cursor: pointer; padding: 10px; background: #f8f9fa; border-radius: 8px;">点击展开查看完整JSON</summary>
+                <pre style="background: #f5f5f5; padding: 15px; border-radius: 8px; overflow-x: auto; margin-top: 10px; font-size: 0.85rem;">${JSON.stringify(result, null, 2)}</pre>
+            </details>
+        `;
+        
+        resultDiv.innerHTML = html;
+        
+    } catch (error) {
+        resultDiv.innerHTML = `
+            <div class="alert alert-error">
+                ❌ 推理失败: ${error.message}
+            </div>
+        `;
+    }
+}
+
 // ==================== 页面初始化 ====================
 
 // 页面加载时执行

@@ -428,6 +428,7 @@
         <div class="tabs">
             <button class="tab-button active" onclick="showTab('stats')">📊 统计数据</button>
             <button class="tab-button" onclick="showTab('test')">🧪 分类测试</button>
+            <button class="tab-button" onclick="showTab('local-model')">🤖 本地模型测试</button>
             <button class="tab-button" onclick="showTab('location')">📍 地理位置</button>
             <button class="tab-button" onclick="showTab('config')">⚙️ 配置管理</button>
         </div>
@@ -673,6 +674,31 @@
                         </tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- 本地模型测试标签页 -->
+        <div id="local-model-tab" class="tab-content">
+            <div class="card">
+                <h2>🤖 本地模型推理测试</h2>
+                <p style="color: #666; margin-bottom: 20px;">
+                    使用本地ONNX模型进行图片分类，包含：ID卡识别、YOLO8s通用检测、MobileNetV3图像分类
+                </p>
+
+                <div class="form-group">
+                    <label for="local-test-image">选择测试图片</label>
+                    <input type="file" id="local-test-image" accept="image/*" onchange="previewLocalTestImage(event)">
+                </div>
+
+                <div id="local-image-preview" style="margin: 20px 0; text-align: center; display: none;">
+                    <img id="local-preview-img" style="max-width: 100%; max-height: 400px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                </div>
+
+                <button class="btn btn-primary" onclick="testLocalModel()" style="width: 100%;">
+                    🚀 开始推理
+                </button>
+
+                <div id="local-test-result" style="margin-top: 20px;"></div>
             </div>
         </div>
 
