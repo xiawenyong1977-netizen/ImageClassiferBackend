@@ -5,14 +5,21 @@
 """
 
 from fastapi import APIRouter, File, UploadFile, Form, Header, HTTPException, Request
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
+import time
+import json
 
 from app.models.schemas import (
     CheckCacheRequest,
     CheckCacheResponse,
+    BatchCheckCacheRequest,
+    BatchCheckCacheResponse,
+    CacheItem,
     ClassificationResponse,
     ClassificationData,
+    BatchClassifyItem,
+    BatchClassifyResponse,
     ErrorResponse
 )
 from app.services.classifier import classifier
@@ -73,6 +80,71 @@ async def check_cache(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/classify/batch-check-cache", response_model=BatchCheckCacheResponse)
+async def batch_check_cache(
+    request_body: BatchCheckCacheRequest,
+    x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
+    request: Request = None
+):
+    """
+    批量检查缓存接口
+    
+    一次性检查多个图片哈希的缓存状态
+    最多支持100个哈希
+    """
+    try:
+        # 获取user_id（优先使用Header）
+        user_id = x_user_id or request_body.user_id
+        
+        # 获取IP地址
+        ip_address = request.client.host if request else None
+        
+        # 批量查询缓存
+        results, request_id = await classifier.batch_check_cache(
+            image_hashes=request_body.image_hashes,
+            user_id=user_id,
+            ip_address=ip_address
+        )
+        
+        # 统计缓存命中数
+        cached_count = sum(1 for item in results if item['cached'])
+        miss_count = len(results) - cached_count
+        
+        # 记录批量缓存查询统计
+        from app.services.stats_service import stats_service
+        await stats_service.log_batch_cache_query(
+            request_id=request_id,
+            user_id=user_id,
+            ip_address=ip_address,
+            total_count=len(results),
+            cached_count=cached_count,
+            miss_count=miss_count
+        )
+        
+        # 构造响应
+        cache_items = [
+            CacheItem(
+                image_hash=item['image_hash'],
+                cached=item['cached'],
+                data=ClassificationData(**item['data']) if item['data'] else None
+            )
+            for item in results
+        ]
+        
+        return BatchCheckCacheResponse(
+            success=True,
+            total=len(results),
+            cached_count=cached_count,
+            items=cache_items,
+            request_id=request_id,
+            timestamp=datetime.now()
+        )
+        
+    except Exception as e:
+        logger.error(f"批量检查缓存失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/classify", response_model=ClassificationResponse)
 async def classify_image(
     image: UploadFile = File(..., description="图片文件"),
@@ -119,5 +191,134 @@ async def classify_image(
         raise
     except Exception as e:
         logger.error(f"图片分类失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/classify/batch", response_model=BatchClassifyResponse)
+async def batch_classify(
+    images: List[UploadFile] = File(..., description="图片文件列表"),
+    image_hashes: Optional[str] = Form(None, description="图片哈希列表JSON字符串"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
+    request: Request = None
+):
+    """
+    批量图片分类接口
+    
+    一次性上传多张图片进行分类
+    最多支持20张图片
+    """
+    try:
+        # 限制最大数量
+        max_images = 20
+        if len(images) > max_images:
+            raise HTTPException(
+                status_code=400,
+                detail=f"一次最多上传{max_images}张图片，当前: {len(images)}"
+            )
+        
+        # 解析image_hashes
+        hashes_list = []
+        if image_hashes:
+            try:
+                hashes_list = json.loads(image_hashes)
+                if not isinstance(hashes_list, list):
+                    hashes_list = []
+            except:
+                hashes_list = []
+        
+        # 获取user_id
+        user_id = x_user_id
+        ip_address = request.client.host if request else None
+        
+        # 生成批量请求ID
+        from app.utils.id_generator import IDGenerator
+        batch_request_id = IDGenerator.generate_request_id()
+        
+        # 记录开始时间
+        batch_start_time = time.time()
+        
+        # 处理每张图片
+        results = []
+        success_count = 0
+        fail_count = 0
+        
+        for index, image in enumerate(images):
+            item_start_time = time.time()
+            
+            try:
+                # 读取图片
+                image_bytes = await image.read()
+                
+                # 获取对应的hash（如果有）
+                image_hash = hashes_list[index] if index < len(hashes_list) else None
+                
+                # 调用分类服务
+                result, from_cache, request_id, processing_time = await classifier.classify_image(
+                    image_bytes=image_bytes,
+                    image_hash=image_hash,
+                    user_id=user_id,
+                    ip_address=ip_address
+                )
+                
+                item_processing_time = int((time.time() - item_start_time) * 1000)
+                
+                # 成功结果
+                results.append(BatchClassifyItem(
+                    index=index,
+                    filename=image.filename or f"image_{index}",
+                    success=True,
+                    data=ClassificationData(**result),
+                    error=None,
+                    from_cache=from_cache,
+                    processing_time_ms=item_processing_time
+                ))
+                success_count += 1
+                
+            except Exception as e:
+                item_processing_time = int((time.time() - item_start_time) * 1000)
+                logger.error(f"批量分类-图片{index}失败: {e}")
+                
+                # 失败结果
+                results.append(BatchClassifyItem(
+                    index=index,
+                    filename=image.filename or f"image_{index}",
+                    success=False,
+                    data=None,
+                    error=str(e),
+                    from_cache=False,
+                    processing_time_ms=item_processing_time
+                ))
+                fail_count += 1
+        
+        # 计算总耗时
+        total_processing_time = int((time.time() - batch_start_time) * 1000)
+        
+        # 记录批量分类统计
+        from app.services.stats_service import stats_service
+        await stats_service.log_batch_classify(
+            request_id=batch_request_id,
+            user_id=user_id,
+            ip_address=ip_address,
+            total_count=len(images),
+            success_count=success_count,
+            fail_count=fail_count,
+            total_processing_time_ms=total_processing_time
+        )
+        
+        return BatchClassifyResponse(
+            success=True,
+            total=len(images),
+            success_count=success_count,
+            fail_count=fail_count,
+            items=results,
+            request_id=batch_request_id,
+            total_processing_time_ms=total_processing_time,
+            timestamp=datetime.now()
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量分类失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
