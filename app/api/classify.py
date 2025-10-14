@@ -249,6 +249,11 @@ async def batch_classify(
                 # 读取图片
                 image_bytes = await image.read()
                 
+                # 验证图片
+                is_valid, error_msg = ImageUtils.validate_image(image_bytes)
+                if not is_valid:
+                    raise Exception(error_msg)
+                
                 # 获取对应的hash（如果有）
                 image_hash = hashes_list[index] if index < len(hashes_list) else None
                 
