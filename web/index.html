@@ -430,6 +430,7 @@
             <button class="tab-button" onclick="showTab('test')">🧪 分类测试</button>
             <button class="tab-button" onclick="showTab('location')">📍 地理位置</button>
             <button class="tab-button" onclick="showTab('config')">⚙️ 配置管理</button>
+            <button class="tab-button" onclick="showTab('release')">📦 发行版本</button>
         </div>
 
         <!-- 统计数据标签页 -->
@@ -467,6 +468,26 @@
             <div class="card">
                 <h2>🤖 推理方式统计</h2>
                 <div id="inference-method-stats">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>📦 批量缓存查询统计</h2>
+                <div id="batch-cache-stats">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>📸 批量分类统计</h2>
+                <div id="batch-classify-stats">
                     <div class="loading">
                         <div class="spinner"></div>
                         <p>加载中...</p>
@@ -715,6 +736,53 @@
                         </tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- 发行版本标签页 -->
+        <div id="release-tab" class="tab-content">
+            <div class="card">
+                <h2>📦 发行版本上传</h2>
+                
+                <div class="upload-area" id="release-upload-area" style="margin-bottom: 20px;">
+                    <input type="file" id="release-file-input" accept=".zip" style="display: none;">
+                    <p style="font-size: 3rem; margin-bottom: 10px;">📦</p>
+                    <p style="font-size: 1.2rem; color: #667eea; font-weight: 500;">点击或拖拽上传发行版本</p>
+                    <p style="color: #999; margin-top: 10px;">只支持 ZIP 格式，最大500MB</p>
+                </div>
+
+                <div id="release-preview-area" class="hidden">
+                    <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+                        <h3 style="margin-bottom: 10px;">📄 文件信息</h3>
+                        <p><strong>文件名：</strong><span id="release-filename"></span></p>
+                        <p><strong>文件大小：</strong><span id="release-filesize"></span></p>
+                        <p><strong>目标文件名：</strong><span id="release-target-name" style="color: #667eea; font-weight: 600;"></span></p>
+                        <p><strong>保存路径：</strong>/var/www/xintuxiangce/dist/</p>
+                    </div>
+                    <div style="text-align: center;">
+                        <button class="btn btn-primary" onclick="uploadRelease()">🚀 开始上传</button>
+                        <button class="btn" onclick="resetReleaseUpload()" style="margin-left: 10px; background: #6c757d; color: white;">重新选择</button>
+                    </div>
+                </div>
+
+                <div id="release-result-area" class="hidden">
+                    <div class="result-box">
+                        <h3>上传结果</h3>
+                        <div id="release-result"></div>
+                    </div>
+                </div>
+
+                <div id="release-alert" style="margin-top: 20px;"></div>
+            </div>
+
+            <div class="card">
+                <h2>📋 历史版本列表</h2>
+                <div id="release-list">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
             </div>
         </div>
 

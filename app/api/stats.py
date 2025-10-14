@@ -58,3 +58,41 @@ async def get_inference_method_stats(current_user: str = Depends(get_current_use
         logger.error(f"获取推理方式统计失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.get("/batch-cache", summary="获取批量缓存查询统计")
+async def get_batch_cache_stats(
+    days: int = 7,
+    current_user: str = Depends(get_current_user)
+):
+    """
+    获取批量缓存查询统计（需要认证）
+    
+    Args:
+        days: 查询最近几天的数据，默认7天
+    """
+    try:
+        stats = await stats_service.get_batch_cache_stats(days=days)
+        return {"success": True, "data": stats}
+    except Exception as e:
+        logger.error(f"获取批量缓存统计失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/batch-classify", summary="获取批量分类统计")
+async def get_batch_classify_stats(
+    days: int = 7,
+    current_user: str = Depends(get_current_user)
+):
+    """
+    获取批量分类统计（需要认证）
+    
+    Args:
+        days: 查询最近几天的数据，默认7天
+    """
+    try:
+        stats = await stats_service.get_batch_classify_stats(days=days)
+        return {"success": True, "data": stats}
+    except Exception as e:
+        logger.error(f"获取批量分类统计失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

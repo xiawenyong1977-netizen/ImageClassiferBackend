@@ -5,7 +5,7 @@
 """
 
 import time
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from app.utils.hash_utils import HashUtils
 from app.utils.id_generator import IDGenerator
 from app.services.cache_service import cache_service
@@ -107,6 +107,54 @@ class ClassifierService:
         
         # 缓存未命中
         return None, False, request_id
+    
+    async def batch_check_cache(
+        self,
+        image_hashes: List[str],
+        user_id: Optional[str] = None,
+        ip_address: Optional[str] = None
+    ) -> Tuple[List[dict], str]:
+        """
+        批量查询缓存
+        
+        Args:
+            image_hashes: 图片哈希列表
+            user_id: 用户ID
+            ip_address: IP地址
+            
+        Returns:
+            (缓存项列表, 请求ID)
+        """
+        request_id = IDGenerator.generate_request_id()
+        results = []
+        
+        # 并发查询所有哈希的缓存
+        for image_hash in image_hashes:
+            cached_result = await cache_service.get_cached_result(image_hash)
+            
+            if cached_result:
+                # 缓存命中
+                await cache_service.increment_hit_count(image_hash)
+                
+                results.append({
+                    "image_hash": image_hash,
+                    "cached": True,
+                    "data": {
+                        "category": cached_result['category'],
+                        "confidence": float(cached_result['confidence']),
+                        "description": cached_result.get('description'),
+                        "local_inference_result": cached_result.get('local_inference_result')
+                    }
+                })
+            else:
+                # 缓存未命中
+                results.append({
+                    "image_hash": image_hash,
+                    "cached": False,
+                    "data": None
+                })
+        
+        return results, request_id
     
     async def classify_image(
         self,

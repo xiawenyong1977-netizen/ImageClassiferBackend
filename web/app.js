@@ -157,6 +157,8 @@ document.addEventListener('DOMContentLoaded', function() {
     loadCacheStats();
     loadCategoryDistribution();
     loadInferenceMethodStats();
+    loadBatchCacheStats();
+    loadBatchClassifyStats();
     
     // 自动刷新统计（每30秒）
     setInterval(() => {
@@ -165,6 +167,8 @@ document.addEventListener('DOMContentLoaded', function() {
             loadCacheStats();
             loadCategoryDistribution();
             loadInferenceMethodStats();
+            loadBatchCacheStats();
+            loadBatchClassifyStats();
         }
     }, 30000);
     
@@ -197,6 +201,36 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
+    
+    // 发行版本上传处理
+    const releaseUploadArea = document.getElementById('release-upload-area');
+    const releaseFileInput = document.getElementById('release-file-input');
+    
+    if (releaseUploadArea && releaseFileInput) {
+        releaseUploadArea.addEventListener('click', () => releaseFileInput.click());
+        
+        releaseFileInput.addEventListener('change', handleReleaseFileSelect);
+        
+        // 拖拽上传
+        releaseUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            releaseUploadArea.classList.add('dragover');
+        });
+        
+        releaseUploadArea.addEventListener('dragleave', () => {
+            releaseUploadArea.classList.remove('dragover');
+        });
+        
+        releaseUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            releaseUploadArea.classList.remove('dragover');
+            
+            if (e.dataTransfer.files.length > 0) {
+                releaseFileInput.files = e.dataTransfer.files;
+                handleReleaseFileSelect();
+            }
+        });
+    }
 });
 
 // 标签页切换
@@ -221,11 +255,18 @@ function showTab(tabName) {
         loadCacheStats();
         loadCategoryDistribution();
         loadInferenceMethodStats();
+        loadBatchCacheStats();
+        loadBatchClassifyStats();
     }
     
     // 如果切换到地理位置页，加载位置统计
     if (tabName === 'location') {
         loadLocationStats();
+    }
+    
+    // 如果切换到发行版本页，加载版本列表
+    if (tabName === 'release') {
+        loadReleaseList();
     }
 }
 
@@ -758,6 +799,192 @@ async function loadInferenceMethodStats() {
     }
 }
 
+// 加载批量缓存查询统计
+async function loadBatchCacheStats() {
+    try {
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/stats/batch-cache?days=7`);
+        const data = await response.json();
+        const stats = data.data;
+        
+        const overall = stats.overall || {};
+        const totalQueries = overall.total_queries || 0;
+        const totalHashes = overall.total_hashes || 0;
+        const totalCached = overall.total_cached || 0;
+        const totalMiss = overall.total_miss || 0;
+        const avgBatchSize = overall.avg_batch_size || 0;
+        const hitRate = overall.hit_rate || 0;
+        
+        document.getElementById('batch-cache-stats').innerHTML = `
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon">📦</div>
+                    <div class="stat-value">${formatNumber(totalQueries)}</div>
+                    <div class="stat-label">批量查询次数</div>
+                    <div class="stat-trend" style="color: #667eea;">最近7天</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🔍</div>
+                    <div class="stat-value">${formatNumber(totalHashes)}</div>
+                    <div class="stat-label">查询哈希总数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">✅</div>
+                    <div class="stat-value">${formatNumber(totalCached)}</div>
+                    <div class="stat-label">缓存命中</div>
+                    <div class="stat-trend" style="color: #28a745;">${hitRate.toFixed(1)}%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">📊</div>
+                    <div class="stat-value">${avgBatchSize.toFixed(1)}</div>
+                    <div class="stat-label">平均批次大小</div>
+                    <div class="stat-trend" style="color: #17a2b8;">个/次</div>
+                </div>
+            </div>
+            
+            ${stats.daily && stats.daily.length > 0 ? `
+                <div style="margin-top: 20px;">
+                    <h3 style="margin-bottom: 10px;">📈 每日统计</h3>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">
+                                <th style="padding: 12px; text-align: left;">日期</th>
+                                <th style="padding: 12px; text-align: center;">查询次数</th>
+                                <th style="padding: 12px; text-align: center;">哈希数</th>
+                                <th style="padding: 12px; text-align: center;">命中数</th>
+                                <th style="padding: 12px; text-align: center;">命中率</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${stats.daily.map((day, index) => `
+                                <tr style="background: ${index % 2 === 0 ? '#ffffff' : '#f8f9fa'}; border-bottom: 1px solid #dee2e6;">
+                                    <td style="padding: 12px;">${day.date}</td>
+                                    <td style="padding: 12px; text-align: center;">${day.queries}</td>
+                                    <td style="padding: 12px; text-align: center;">${day.hashes}</td>
+                                    <td style="padding: 12px; text-align: center;">${day.cached}</td>
+                                    <td style="padding: 12px; text-align: center;">
+                                        <span style="color: ${day.hit_rate >= 50 ? '#28a745' : '#ffc107'};">
+                                            ${day.hit_rate.toFixed(1)}%
+                                        </span>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            ` : '<p style="text-align: center; color: #999; padding: 20px;">暂无数据</p>'}
+        `;
+        
+    } catch (error) {
+        document.getElementById('batch-cache-stats').innerHTML = `
+            <div class="alert alert-error">加载失败: ${error.message}</div>
+        `;
+    }
+}
+
+// 加载批量分类统计
+async function loadBatchClassifyStats() {
+    try {
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/stats/batch-classify?days=7`);
+        const data = await response.json();
+        const stats = data.data;
+        
+        const overall = stats.overall || {};
+        const totalBatches = overall.total_batches || 0;
+        const totalImages = overall.total_images || 0;
+        const totalSuccess = overall.total_success || 0;
+        const totalFail = overall.total_fail || 0;
+        const avgBatchSize = overall.avg_batch_size || 0;
+        const avgTimePerImage = overall.avg_time_per_image || 0;
+        const successRate = overall.success_rate || 0;
+        
+        document.getElementById('batch-classify-stats').innerHTML = `
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon">📸</div>
+                    <div class="stat-value">${formatNumber(totalBatches)}</div>
+                    <div class="stat-label">批量分类次数</div>
+                    <div class="stat-trend" style="color: #667eea;">最近7天</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🖼️</div>
+                    <div class="stat-value">${formatNumber(totalImages)}</div>
+                    <div class="stat-label">分类图片总数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">✅</div>
+                    <div class="stat-value">${formatNumber(totalSuccess)}</div>
+                    <div class="stat-label">成功</div>
+                    <div class="stat-trend" style="color: #28a745;">${successRate.toFixed(1)}%</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">⏱️</div>
+                    <div class="stat-value">${avgTimePerImage.toFixed(0)}</div>
+                    <div class="stat-label">平均耗时</div>
+                    <div class="stat-trend" style="color: #17a2b8;">ms/张</div>
+                </div>
+            </div>
+            
+            <div class="stats-grid" style="margin-top: 20px;">
+                <div class="stat-card" style="border-left: 4px solid #667eea;">
+                    <div class="stat-icon">📊</div>
+                    <div class="stat-value">${avgBatchSize.toFixed(1)}</div>
+                    <div class="stat-label">平均批次大小</div>
+                    <div class="stat-trend" style="color: #667eea;">张/次</div>
+                </div>
+                <div class="stat-card" style="border-left: 4px solid ${totalFail > 0 ? '#dc3545' : '#28a745'};">
+                    <div class="stat-icon">${totalFail > 0 ? '❌' : '✨'}</div>
+                    <div class="stat-value">${formatNumber(totalFail)}</div>
+                    <div class="stat-label">失败数</div>
+                    <div class="stat-trend" style="color: ${totalFail > 0 ? '#dc3545' : '#999'};">
+                        ${totalImages > 0 ? ((totalFail/totalImages*100).toFixed(1)) : 0}%
+                    </div>
+                </div>
+            </div>
+            
+            ${stats.daily && stats.daily.length > 0 ? `
+                <div style="margin-top: 20px;">
+                    <h3 style="margin-bottom: 10px;">📈 每日统计</h3>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">
+                                <th style="padding: 12px; text-align: left;">日期</th>
+                                <th style="padding: 12px; text-align: center;">批次</th>
+                                <th style="padding: 12px; text-align: center;">图片数</th>
+                                <th style="padding: 12px; text-align: center;">成功</th>
+                                <th style="padding: 12px; text-align: center;">失败</th>
+                                <th style="padding: 12px; text-align: center;">成功率</th>
+                                <th style="padding: 12px; text-align: center;">平均耗时</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${stats.daily.map((day, index) => `
+                                <tr style="background: ${index % 2 === 0 ? '#ffffff' : '#f8f9fa'}; border-bottom: 1px solid #dee2e6;">
+                                    <td style="padding: 12px;">${day.date}</td>
+                                    <td style="padding: 12px; text-align: center;">${day.batches}</td>
+                                    <td style="padding: 12px; text-align: center;">${day.images}</td>
+                                    <td style="padding: 12px; text-align: center;">${day.success}</td>
+                                    <td style="padding: 12px; text-align: center;">${day.fail}</td>
+                                    <td style="padding: 12px; text-align: center;">
+                                        <span style="color: ${day.success_rate >= 90 ? '#28a745' : day.success_rate >= 70 ? '#ffc107' : '#dc3545'};">
+                                            ${day.success_rate.toFixed(1)}%
+                                        </span>
+                                    </td>
+                                    <td style="padding: 12px; text-align: center;">${day.avg_time.toFixed(0)}ms</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            ` : '<p style="text-align: center; color: #999; padding: 20px;">暂无数据</p>'}
+        `;
+        
+    } catch (error) {
+        document.getElementById('batch-classify-stats').innerHTML = `
+            <div class="alert alert-error">加载失败: ${error.message}</div>
+        `;
+    }
+}
+
 // 格式化百分比
 function formatPercent(num) {
     return num ? num.toFixed(2) + '%' : '0%';
@@ -1241,5 +1468,196 @@ async function displayLocalInferenceDetails(localResult) {
     }
     
     return html;
+}
+
+// ==================== 发行版本上传功能 ====================
+
+// 全局变量
+let selectedReleaseFile = null;
+
+// 处理文件选择
+function handleReleaseFileSelect() {
+    const fileInput = document.getElementById('release-file-input');
+    const file = fileInput.files[0];
+    
+    if (!file) return;
+    
+    // 检查文件类型
+    if (!file.name.endsWith('.zip')) {
+        showReleaseAlert('❌ 只支持zip文件', 'error');
+        return;
+    }
+    
+    // 检查文件大小（最大500MB）
+    const maxSize = 500 * 1024 * 1024;
+    if (file.size > maxSize) {
+        showReleaseAlert('❌ 文件过大，最大支持500MB', 'error');
+        return;
+    }
+    
+    selectedReleaseFile = file;
+    
+    // 生成目标文件名：xtxc + YYYYMMDDHHmm.zip
+    const now = new Date();
+    const timestamp = now.getFullYear() +
+        String(now.getMonth() + 1).padStart(2, '0') +
+        String(now.getDate()).padStart(2, '0') +
+        String(now.getHours()).padStart(2, '0') +
+        String(now.getMinutes()).padStart(2, '0');
+    const targetFilename = `xtxc${timestamp}.zip`;
+    
+    // 显示文件信息
+    document.getElementById('release-filename').textContent = file.name;
+    document.getElementById('release-filesize').textContent = (file.size / 1024 / 1024).toFixed(2) + ' MB';
+    document.getElementById('release-target-name').textContent = targetFilename;
+    
+    // 切换显示
+    document.getElementById('release-upload-area').classList.add('hidden');
+    document.getElementById('release-preview-area').classList.remove('hidden');
+    document.getElementById('release-result-area').classList.add('hidden');
+}
+
+// 重置上传
+function resetReleaseUpload() {
+    selectedReleaseFile = null;
+    document.getElementById('release-file-input').value = '';
+    document.getElementById('release-upload-area').classList.remove('hidden');
+    document.getElementById('release-preview-area').classList.add('hidden');
+    document.getElementById('release-result-area').classList.add('hidden');
+}
+
+// 上传发行版本
+async function uploadRelease() {
+    if (!selectedReleaseFile) {
+        showReleaseAlert('❌ 请先选择文件', 'error');
+        return;
+    }
+    
+    try {
+        showReleaseAlert('⏳ 正在上传，请稍候...', 'info');
+        
+        const formData = new FormData();
+        formData.append('file', selectedReleaseFile);
+        
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/release/upload`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || '上传失败');
+        }
+        
+        const result = await response.json();
+        
+        // 显示结果
+        const resultHtml = `
+            <div style="padding: 20px; background: #d4edda; border-radius: 8px;">
+                <h4 style="color: #155724; margin-bottom: 15px;">✅ 上传成功！</h4>
+                <p><strong>文件名：</strong>${result.filename}</p>
+                <p><strong>保存路径：</strong>${result.file_path}</p>
+                <p><strong>文件大小：</strong>${result.file_size_mb} MB</p>
+                <p><strong>上传时间：</strong>${new Date(result.upload_time).toLocaleString('zh-CN')}</p>
+            </div>
+        `;
+        
+        document.getElementById('release-result').innerHTML = resultHtml;
+        document.getElementById('release-result-area').classList.remove('hidden');
+        
+        showReleaseAlert('✅ 发行版本上传成功！', 'success');
+        
+        // 刷新版本列表
+        loadReleaseList();
+        
+        // 3秒后重置
+        setTimeout(() => {
+            resetReleaseUpload();
+        }, 3000);
+        
+    } catch (error) {
+        showReleaseAlert(`❌ 上传失败: ${error.message}`, 'error');
+    }
+}
+
+// 加载发行版本列表
+async function loadReleaseList() {
+    try {
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/release/list`);
+        
+        if (!response.ok) {
+            throw new Error('获取列表失败');
+        }
+        
+        const data = await response.json();
+        
+        if (data.total === 0) {
+            document.getElementById('release-list').innerHTML = `
+                <div style="text-align: center; padding: 40px; color: #999;">
+                    <p style="font-size: 3rem;">📦</p>
+                    <p>暂无发行版本</p>
+                </div>
+            `;
+            return;
+        }
+        
+        let html = `
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">
+                        <th style="padding: 12px; text-align: left;">文件名</th>
+                        <th style="padding: 12px; text-align: center;">大小</th>
+                        <th style="padding: 12px; text-align: center;">上传时间</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+        
+        data.releases.forEach((release, index) => {
+            const bgColor = index % 2 === 0 ? '#ffffff' : '#f8f9fa';
+            html += `
+                <tr style="background: ${bgColor}; border-bottom: 1px solid #dee2e6;">
+                    <td style="padding: 12px; font-family: monospace;">${release.filename}</td>
+                    <td style="padding: 12px; text-align: center;">${release.size_mb} MB</td>
+                    <td style="padding: 12px; text-align: center;">${release.upload_time}</td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                </tbody>
+            </table>
+        `;
+        
+        document.getElementById('release-list').innerHTML = html;
+        
+    } catch (error) {
+        document.getElementById('release-list').innerHTML = `
+            <div style="text-align: center; padding: 40px; color: #dc3545;">
+                <p>❌ 加载失败: ${error.message}</p>
+            </div>
+        `;
+    }
+}
+
+// 显示发行版本提示
+function showReleaseAlert(message, type = 'info') {
+    const alertDiv = document.getElementById('release-alert');
+    const bgColor = type === 'success' ? '#d4edda' : type === 'error' ? '#f8d7da' : '#d1ecf1';
+    const textColor = type === 'success' ? '#155724' : type === 'error' ? '#721c24' : '#0c5460';
+    const borderColor = type === 'success' ? '#c3e6cb' : type === 'error' ? '#f5c6cb' : '#bee5eb';
+    
+    alertDiv.innerHTML = `
+        <div style="background: ${bgColor}; color: ${textColor}; border: 1px solid ${borderColor}; padding: 15px; border-radius: 8px;">
+            ${message}
+        </div>
+    `;
+    
+    // 3秒后自动消失（除非是加载中）
+    if (!message.includes('⏳')) {
+        setTimeout(() => {
+            alertDiv.innerHTML = '';
+        }, 3000);
+    }
 }
 
