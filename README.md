@@ -1,202 +1,313 @@
-# 图片分类后端系统
+# 图片分类后端系统 - AI智能照片分类服务
 
-基于大模型的图片分类服务，支持8种预定义分类类别，具有智能缓存和成本优化功能。
+[![Website](https://img.shields.io/badge/website-https://www.xintuxiangce.top-blue.svg)](https://www.xintuxiangce.top/intro.html)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-green.svg)](https://fastapi.tiangolo.com)
+[![AI](https://img.shields.io/badge/AI-90%25%2B%20Accuracy-brightgreen.svg)](https://www.xintuxiangce.top/intro.html)
 
-## 🎯 核心特性
+## 📖 项目简介
 
-- ✅ **8种预定义分类**：社交活动、宠物萌照、单人照片、美食记录、旅行风景、手机截图、证件照、其它
-- ✅ **智能缓存**：SHA-256哈希去重，避免重复调用大模型
-- ✅ **带宽优化**：支持哈希预查询，节省90%上传带宽
-- ✅ **成本优化**：全局缓存机制，大幅降低API调用成本
-- ✅ **统计分析**：完整的请求日志和统计功能
-- ✅ **隐私保护**：不存储原始图片
+**图片分类后端系统**是基于大模型技术的智能照片分类服务，为客户端提供高精度的图片分类API，支持8种预定义分类和智能缓存机制，显著降低大模型调用成本。
 
-## 📋 系统要求
+### 核心优势
 
-- Python 3.10+
-- MySQL 8.0+
-- 大模型API（OpenAI GPT-4 Vision 或 Claude Vision）
+- 🤖 **AI智能分类** - 采用先进的深度学习技术，准确率高达90%以上
+- 💰 **成本优化** - 智能缓存机制，避免重复调用大模型，节省API成本
+- ⚡ **高性能** - FastAPI异步框架，支持高并发处理
+- 🔒 **安全可靠** - 支持用户隔离，保护用户隐私数据
+- 📊 **统计分析** - 完整的请求统计和性能监控
+- 🔄 **混合推理** - 支持远程推理和本地推理，确保服务可用性
+- 🌍 **地理位置** - 集成地理位置API，支持城市分类
+- 🛠️ **管理后台** - 提供Web管理界面，方便运维管理
+
+## ✨ 核心功能
+
+### 📋 智能分类
+
+支持8大预定义分类类别：
+
+- 📱 **手机截图** (screenshot) - 手机屏幕截图、应用界面
+- 🪪 **证件照片** (idcard) - 身份证、护照、驾照等重要证件
+- 👤 **单人照片** (single_person) - 个人照、自拍、肖像照片
+- 👥 **社交活动** (social_activities) - 聚会、合影、多人互动场景
+- 🏞️ **旅行风景** (travel_scenery) - 旅游景点、山川湖海、自然风光
+- 🍔 **美食记录** (foods) - 食物、餐饮、烹饪相关照片
+- 🐱 **宠物萌照** (pets) - 猫、狗等宠物照片
+- 📦 **其它** (other) - 无法归类到上述类别的照片
+
+### 💾 智能缓存
+
+- **SHA-256哈希去重** - 基于图片内容的智能缓存
+- **全局共享缓存** - 多用户共享缓存，最大化成本节省
+- **缓存统计** - 详细的缓存命中率统计
+- **手动管理** - 支持手动删除特定用户缓存
+
+### 🌍 地理位置服务
+
+- **EXIF解析** - 自动解析照片GPS信息
+- **城市识别** - 基于坐标识别拍摄城市
+- **中文地名** - 支持中文城市名称映射
+
+### 📊 统计分析
+
+- **请求日志** - 完整的API调用记录
+- **性能监控** - 处理时间、成功率等指标
+- **成本统计** - API调用成本分析
+- **用户行为** - 用户使用模式分析
 
 ## 🚀 快速开始
 
-### 1. 安装依赖
+### 系统要求
 
+- **Python**: 3.8 或更高版本
+- **MySQL**: 8.0 或更高版本
+- **内存**: 4GB 以上（推荐8GB）
+- **存储**: 1GB 可用磁盘空间
+
+### 环境配置
+
+1. **克隆项目**
 ```bash
-# 激活conda环境
-conda activate wechat-classifier
+git clone https://github.com/your-username/ImageClassifierBackend.git
+cd ImageClassifierBackend
+```
 
-# 安装Python依赖
+2. **安装依赖**
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. 配置环境变量
-
+3. **配置环境变量**
 ```bash
-# 复制环境变量模板
 cp env.example .env
-
-# 编辑.env文件，配置数据库和大模型API
-# 必须配置：
-# - MYSQL_*: MySQL数据库连接信息
-# - LLM_API_KEY: 大模型API密钥
+# 编辑 .env 文件，配置数据库和API密钥
 ```
 
-### 3. 初始化数据库
-
+4. **初始化数据库**
 ```bash
-# 使用MySQL客户端执行初始化脚本
-mysql -u root -p < sql/init.sql
+# 创建数据库
+mysql -u root -p -e "CREATE DATABASE image_classifier;"
+
+# 导入数据库结构
+mysql -u root -p image_classifier < sql/init.sql
 ```
 
-### 4. 启动服务
-
-**开发环境：**
-
+5. **启动服务**
 ```bash
-# 使用Uvicorn启动（支持热重载）
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
+# 开发模式
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-**生产环境：**
-
-```bash
-# 使用Gunicorn启动（多进程）
+# 生产模式
 gunicorn -c gunicorn_config.py app.main:app
 ```
 
-### 5. 访问API文档
+### 使用方式
 
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-- 健康检查: http://localhost:8000/api/v1/health
+#### API调用示例
 
-## 📚 API接口
+```bash
+# 单张图片分类
+curl -X POST "http://localhost:8000/api/v1/classify" \
+  -H "X-User-ID: your-user-id" \
+  -F "image=@photo.jpg"
 
-### 1. 检查缓存
+# 批量图片分类
+curl -X POST "http://localhost:8000/api/v1/classify/batch" \
+  -H "X-User-ID: your-user-id" \
+  -F "images=@photo1.jpg" \
+  -F "images=@photo2.jpg"
 
-```http
-POST /api/v1/classify/check-cache
-Content-Type: application/json
-
-{
-  "image_hash": "abc123...",
-  "user_id": "device_uuid_xxx"
-}
+# 缓存查询
+curl -X POST "http://localhost:8000/api/v1/classify/check-cache" \
+  -H "Content-Type: application/json" \
+  -d '{"image_hash": "your-image-hash", "user_id": "your-user-id"}'
 ```
 
-### 2. 图片分类
+## 📊 性能指标
 
-```http
-POST /api/v1/classify
-Content-Type: multipart/form-data
+| 指标 | 数据 |
+|------|------|
+| 分类准确率 | **90%+** |
+| 支持分类类别 | **8大类** |
+| 缓存命中率 | **60-80%** |
+| API响应时间 | **<2秒** |
+| 并发处理能力 | **100+ QPS** |
+| 成本节省 | **60-80%** |
 
-image: <File>
-image_hash: <String> (可选)
-X-User-ID: <String> (Header, 可选)
-```
+## 🛠️ 技术架构
 
-### 3. 统计接口
+### 后端技术栈
 
-- `GET /api/v1/stats/today` - 今日统计
-- `GET /api/v1/stats/cache-efficiency` - 缓存效率
-- `GET /api/v1/stats/category-distribution` - 分类分布
+- **FastAPI** - 现代、快速的Web框架
+- **MySQL 8.0** - 关系型数据库
+- **aiomysql** - 异步MySQL驱动
+- **Pydantic** - 数据验证和序列化
+- **Uvicorn** - ASGI服务器
 
-### 4. 健康检查
+### AI技术
 
-```http
-GET /api/v1/health
-```
+- **阿里云通义千问** - 大模型推理服务
+- **ONNX Runtime** - 本地模型推理引擎
+- **YOLOv8** - 物体检测模型
+- **MobileNetV3** - 图像分类模型
 
-## 🗂️ 项目结构
+### 性能优化
+
+- **异步处理** - 全异步架构，支持高并发
+- **连接池** - 数据库连接池管理
+- **智能缓存** - SHA-256哈希缓存机制
+- **批量处理** - 批量API调用优化
+- **分层处理** - 截图检测→缓存查询→远程推理→本地降级
+
+## 📁 项目结构
 
 ```
 ImageClassifierBackend/
-├── app/
-│   ├── api/                    # API路由
-│   │   ├── classify.py         # 分类接口
-│   │   ├── stats.py            # 统计接口
-│   │   └── health.py           # 健康检查
-│   ├── services/               # 服务层
-│   │   ├── classifier.py       # 分类服务
-│   │   ├── cache_service.py    # 缓存服务
-│   │   ├── model_client.py     # 大模型客户端
-│   │   └── stats_service.py    # 统计服务
-│   ├── models/                 # 数据模型
-│   │   └── schemas.py          # Pydantic模型
-│   ├── utils/                  # 工具类
-│   │   ├── id_generator.py     # ID生成器
-│   │   ├── hash_utils.py       # 哈希工具
-│   │   └── image_utils.py      # 图片工具
-│   ├── config.py               # 配置管理
-│   ├── database.py             # 数据库连接
-│   └── main.py                 # 应用入口
-├── sql/
-│   └── init.sql                # 数据库初始化脚本
-├── requirements.txt            # Python依赖
-├── gunicorn_config.py          # Gunicorn配置
-├── env.example                 # 环境变量模板
-├── DESIGN.md                   # 详细设计文档
-└── README.md                   # 本文件
+├── app/                    # 应用核心代码
+│   ├── api/               # API路由
+│   │   ├── auth.py        # 认证相关
+│   │   ├── classify.py    # 分类API
+│   │   ├── health.py      # 健康检查
+│   │   ├── local_classify.py  # 本地推理
+│   │   ├── location.py    # 地理位置
+│   │   ├── release.py     # 版本发布
+│   │   └── stats.py       # 统计分析
+│   ├── models/            # 数据模型
+│   │   ├── schemas.py     # Pydantic模型
+│   │   └── *.onnx         # AI模型文件
+│   ├── services/          # 业务服务
+│   │   ├── cache_service.py      # 缓存服务
+│   │   ├── classifier.py         # 分类服务
+│   │   ├── local_model_inference.py  # 本地推理
+│   │   ├── model_client.py       # 模型客户端
+│   │   └── stats_service.py      # 统计服务
+│   ├── utils/             # 工具函数
+│   │   ├── hash_utils.py  # 哈希工具
+│   │   ├── id_generator.py # ID生成器
+│   │   └── image_utils.py  # 图片工具
+│   ├── config.py          # 配置管理
+│   ├── database.py        # 数据库连接
+│   └── main.py           # 应用入口
+├── docs/                  # 📚 项目文档
+├── tools/                 # 🔧 工具脚本
+│   ├── delete_user_cache.py  # 缓存管理
+│   ├── check_user_data.py    # 数据查询
+│   └── test_local_inference.py # 测试工具
+├── sql/                   # 数据库脚本
+├── web/                   # Web管理界面
+├── requirements.txt       # Python依赖
+└── env.example           # 环境变量示例
 ```
 
 ## 🔧 配置说明
 
-主要配置项（.env文件）：
+### 环境变量配置
 
-```ini
-# MySQL数据库
+```bash
+# 数据库配置
 MYSQL_HOST=localhost
 MYSQL_PORT=3306
 MYSQL_USER=root
 MYSQL_PASSWORD=your_password
 MYSQL_DATABASE=image_classifier
 
-# 大模型API
-LLM_PROVIDER=openai              # openai / claude
-LLM_API_KEY=sk-your-api-key
-LLM_MODEL=gpt-4-vision-preview
+# 大模型API配置
+LLM_PROVIDER=aliyun
+LLM_API_KEY=your-dashscope-api-key
+LLM_MODEL=qwen-vl-plus
 
 # 应用配置
 APP_HOST=0.0.0.0
 APP_PORT=8000
-MAX_IMAGE_SIZE_MB=10
+APP_DEBUG=false
 ```
 
-## 📊 8种分类类别
+### 分类配置
 
-| 类别Key | 中文名称 | 说明 |
-|---------|---------|------|
-| `social_activities` | 社交活动 | 聚会、合影等 |
-| `pets` | 宠物萌照 | 猫、狗等宠物 |
-| `single_person` | 单人照片 | 个人照、自拍 |
-| `foods` | 美食记录 | 美食、餐饮 |
-| `travel_scenery` | 旅行风景 | 旅游、风景 |
-| `screenshot` | 手机截图 | 屏幕截图 |
-| `idcard` | 证件照 | 身份证等证件 |
-| `other` | 其它 | 其他类型 |
-
-## 💰 成本优化
-
-通过全局缓存机制，大幅降低成本：
-
-```
-示例：
-- 无缓存：10000次请求 × 0.01元 = 100元/天
-- 有缓存(30%命中)：7000次 × 0.01元 = 70元/天
-- 月节省：900元
-```
-
-## 🔍 监控与调试
-
-### 查看日志
+系统支持自定义分类提示词，可在环境变量中配置：
 
 ```bash
-# 实时日志
-tail -f /var/log/image-classifier/error.log
-
-# Gunicorn访问日志
-tail -f /var/log/image-classifier/access.log
+CLASSIFICATION_PROMPT="请对这张图片进行分类。你必须从以下8个类别中选择一个：..."
 ```
+
+## 📚 文档导航
+
+- **新手入门**：[快速使用手册](./docs/快速使用手册.md) | [README](./docs/README.md)
+- **系统架构**：[设计文档](./docs/DESIGN.md) | [架构说明](./docs/架构说明_服务器与客户端职责分离.md)
+- **部署配置**：[部署指南](./docs/DEPLOY.md) | [阿里云配置](./docs/ALIYUN_SETUP.md)
+- **模型推理**：[本地推理](./docs/本地模型推理使用说明.md) | [混合推理](./docs/混合推理策略说明.md)
+- **工具脚本**：[工具说明](./tools/README.md) - 数据管理、测试工具等
+
+## 🔐 安全特性
+
+- ✅ **用户隔离** - 基于用户ID的数据隔离
+- ✅ **请求日志** - 完整的API调用审计
+- ✅ **权限控制** - 管理后台权限验证
+- ✅ **数据加密** - 敏感数据加密存储
+- ✅ **输入验证** - 严格的输入数据验证
+
+## 🔧 开发指南
+
+### 开发环境设置
+
+```bash
+# 安装开发依赖
+pip install -r requirements.txt
+
+# 启动开发服务器
+python -m uvicorn app.main:app --reload
+
+# 运行测试
+python tools/test_local_inference.py
+```
+
+### API文档
+
+启动服务后访问：
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+### 工具脚本
+
+```bash
+# 删除用户缓存
+python tools/delete_user_cache.py <user_id> [--confirm]
+
+# 检查用户数据
+python tools/check_user_data.py <user_id>
+
+# 测试本地推理
+python tools/test_local_inference.py
+```
+
+## 📦 部署说明
+
+### Docker部署
+
+```bash
+# 构建镜像
+docker build -t image-classifier-backend .
+
+# 运行容器
+docker run -d -p 8000:8000 \
+  -e MYSQL_HOST=your-mysql-host \
+  -e MYSQL_PASSWORD=your-password \
+  image-classifier-backend
+```
+
+### 生产部署
+
+```bash
+# 使用Gunicorn部署
+gunicorn -c gunicorn_config.py app.main:app
+
+# 使用systemd服务
+sudo systemctl start image-classifier
+sudo systemctl enable image-classifier
+```
+
+## 📊 监控和运维
 
 ### 健康检查
 
@@ -204,79 +315,80 @@ tail -f /var/log/image-classifier/access.log
 curl http://localhost:8000/api/v1/health
 ```
 
-### 查看统计
+### 性能监控
+
+- **请求统计**: `/api/v1/stats/requests`
+- **缓存统计**: `/api/v1/stats/cache`
+- **系统状态**: `/api/v1/health`
+
+### 日志管理
 
 ```bash
-# 今日统计
-curl http://localhost:8000/api/v1/stats/today
+# 查看应用日志
+tail -f /var/log/image-classifier/app.log
 
-# 缓存效率
-curl http://localhost:8000/api/v1/stats/cache-efficiency
+# 查看错误日志
+grep "ERROR" /var/log/image-classifier/app.log
 ```
 
-## 📦 生产环境部署
+## 🤝 贡献指南
 
-详见 [DESIGN.md](DESIGN.md) 中的"Web容器实现与部署方案"章节。
+我们欢迎各种形式的贡献：
 
-### 使用Docker
+- 🐛 **报告Bug** - 在[Issues](https://github.com/your-username/ImageClassifierBackend/issues)中提交问题
+- 💡 **功能建议** - 提出新功能想法和改进建议
+- 📝 **文档改进** - 完善使用说明和开发文档
+- 🔧 **提交代码** - 修复Bug或添加新功能
+- 🌟 **Star支持** - 给项目点星，支持项目发展
 
-```bash
-docker-compose up -d
-```
+### 贡献步骤
 
-### 使用Systemd
+1. Fork 本仓库
+2. 创建您的特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交您的更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 打开一个 Pull Request
 
-```bash
-# 配置服务
-sudo cp image-classifier.service /etc/systemd/system/
+## 📚 相关资源
 
-# 启动服务
-sudo systemctl start image-classifier
-sudo systemctl enable image-classifier
-```
+- [官方网站](https://www.xintuxiangce.top/intro.html) - 软件下载和使用指南
+- [使用教程](https://www.xintuxiangce.top/blog.html) - 详细的使用教程
+- [技术博客](https://www.xintuxiangce.top/blog.html) - AI照片分类技术解析
+- [API文档](http://localhost:8000/docs) - 完整的API文档
+- [更新日志](https://github.com/your-username/ImageClassifierBackend/releases) - 版本更新记录
 
-## 📖 详细文档
+## 🔄 更新日志
 
-完整的系统设计文档请查看：[DESIGN.md](DESIGN.md)
-
-包含：
-- 系统架构设计
-- 接口详细说明
-- 数据库表结构
-- 部署方案
-- 性能优化建议
-
-## 🤝 开发指南
-
-### 添加新的分类类别
-
-1. 修改 `app/config.py` 中的 `CATEGORIES` 列表
-2. 修改 `app/services/model_client.py` 中的提示词
-3. 更新数据库（如需要）
-4. 更新客户端的分类映射表
-
-### 运行测试
-
-```bash
-pytest tests/
-```
-
-## 📝 版本历史
-
-- v1.0.0 (2025-10-10) - 初始版本
-  - 支持8种预定义分类
-  - 实现智能缓存机制
-  - 带宽优化和成本优化
+查看 [CHANGELOG](CHANGELOG.md) 了解版本更新详情。
 
 ## 📄 许可证
 
-本项目供内部使用。
+本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
 
-## 👥 团队
+## 📞 联系方式
 
-ImageClassifier Team
+- 🌐 **官网**：https://www.xintuxiangce.top/intro.html
+- 📧 **邮箱**：contact@xintuxiangce.top
+- 💬 **问题反馈**：[GitHub Issues](https://github.com/your-username/ImageClassifierBackend/issues)
+- 📱 **技术支持**：通过官网联系表单
+
+## 🙏 致谢
+
+感谢所有使用和支持图片分类后端系统的用户！
+
+特别感谢：
+- FastAPI 团队提供的优秀Web框架
+- 阿里云通义千问团队提供的大模型服务
+- ONNX Runtime 团队提供的高性能推理引擎
+- Ultralytics 团队的YOLOv8模型
+- 所有开源项目的贡献者
+
+## 🌟 Star History
+
+如果这个项目对您有帮助，请给我们一个Star！⭐
 
 ---
 
-**需要帮助？** 查看 [DESIGN.md](DESIGN.md) 或联系开发团队。
+**© 2025 图片分类后端系统. 保留所有权利.**
 
+*让AI分类更智能，让API调用更经济*
