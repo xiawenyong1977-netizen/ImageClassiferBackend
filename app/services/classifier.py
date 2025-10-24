@@ -128,8 +128,24 @@ class ClassifierService:
         request_id = IDGenerator.generate_request_id()
         results = []
         
+        # 模拟测试：让一半的查询返回失败
+        import random
+        import time
+        
         # 并发查询所有哈希的缓存
-        for image_hash in image_hashes:
+        for i, image_hash in enumerate(image_hashes):
+            # 模拟50%的失败率
+            if random.random() < 0.5:
+                # 模拟失败情况
+                results.append({
+                    "image_hash": image_hash,
+                    "cached": False,
+                    "data": None,
+                    "error": "模拟缓存查询失败"
+                })
+                continue
+            
+            # 正常的缓存查询逻辑
             cached_result = await cache_service.get_cached_result(image_hash)
             
             if cached_result:
