@@ -1,10 +1,10 @@
 # 图片分类后端系统 - AI智能照片分类服务
 
-[![Website](https://img.shields.io/badge/website-https://www.xintuxiangce.top-blue.svg)](https://www.xintuxiangce.top/intro.html)
+[![Website](https://img.shields.io/badge/website-https://www.xintuxiangce.top-blue.svg)](https://www.xintuxiangce.top/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-green.svg)](https://fastapi.tiangolo.com)
-[![AI](https://img.shields.io/badge/AI-90%25%2B%20Accuracy-brightgreen.svg)](https://www.xintuxiangce.top/intro.html)
+[![AI](https://img.shields.io/badge/AI-90%25%2B%20Accuracy-brightgreen.svg)](https://www.xintuxiangce.top/)
 
 ## 📖 项目简介
 
@@ -351,7 +351,7 @@ grep "ERROR" /var/log/image-classifier/app.log
 
 ## 📚 相关资源
 
-- [官方网站](https://www.xintuxiangce.top/intro.html) - 软件下载和使用指南
+- [官方网站](https://www.xintuxiangce.top/) - 软件下载和使用指南
 - [使用教程](https://www.xintuxiangce.top/blog.html) - 详细的使用教程
 - [技术博客](https://www.xintuxiangce.top/blog.html) - AI照片分类技术解析
 - [API文档](http://localhost:8000/docs) - 完整的API文档
@@ -367,7 +367,7 @@ grep "ERROR" /var/log/image-classifier/app.log
 
 ## 📞 联系方式
 
-- 🌐 **官网**：https://www.xintuxiangce.top/intro.html
+- 🌐 **官网**：https://www.xintuxiangce.top/
 - 📧 **邮箱**：contact@xintuxiangce.top
 - 💬 **问题反馈**：[GitHub Issues](https://github.com/your-username/ImageClassifierBackend/issues)
 - 📱 **技术支持**：通过官网联系表单
