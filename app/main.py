@@ -13,7 +13,7 @@ import os
 
 from app.config import settings
 from app.database import db
-from app.api import classify, stats, health, location, auth, local_classify, config, release
+from app.api import classify, stats, health, location, auth, local_classify, config, release, image_edit
 
 
 # 配置日志
@@ -85,6 +85,7 @@ app.include_router(release.router)  # 发行版本上传
 app.include_router(stats.router)
 app.include_router(health.router)
 app.include_router(location.router)
+app.include_router(image_edit.router)  # 图像编辑
 
 # 静态文件服务（Web管理界面）
 web_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")

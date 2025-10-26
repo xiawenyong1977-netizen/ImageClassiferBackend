@@ -40,3 +40,17 @@ class HashUtils:
                 sha256_hash.update(byte_block)
         return sha256_hash.hexdigest()
 
+
+# 全局函数别名，方便导入使用
+def calculate_hash(data: bytes) -> str:
+    """
+    计算数据的SHA-256哈希值（全局函数）
+    
+    Args:
+        data: 二进制数据
+        
+    Returns:
+        64字符的十六进制哈希字符串
+    """
+    return HashUtils.calculate_sha256(data)
+
