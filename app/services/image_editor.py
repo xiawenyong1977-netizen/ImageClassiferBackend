@@ -7,7 +7,7 @@ import asyncio
 import base64
 import json
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from loguru import logger
 import dashscope
 import httpx
@@ -135,7 +135,7 @@ class ImageEditService:
         image_bytes: bytes,
         edit_type: str,
         edit_params: Dict
-    ) -> tuple[str, bool]:
+    ) -> Tuple[str, bool]:
         """调用阿里云图像编辑API - 使用image_edit_cache表做缓存
         
         Returns:

@@ -535,6 +535,31 @@
 
                 <div id="test-alert"></div>
             </div>
+
+            <div class="card">
+                <h2>✨ 照片精修测试</h2>
+                
+                <div class="upload-area" id="edit-upload-area">
+                    <input type="file" id="edit-file-input" accept="image/*" multiple style="display: none;">
+                    <p style="font-size: 3rem; margin-bottom: 10px;">🎨</p>
+                    <p style="font-size: 1.2rem; color: #667eea; font-weight: 500;">点击或拖拽照片到此处</p>
+                    <p style="color: #999; margin-top: 10px;">支持1-9张JPG/PNG图片，自动人像精修</p>
+                </div>
+
+                <div id="edit-preview-area" class="hidden">
+                    <div id="edit-preview-images" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; margin-top: 20px;"></div>
+                    <div style="text-align: center; margin: 20px 0;">
+                        <button class="btn btn-primary" onclick="startImageEdit()">🚀 开始精修</button>
+                        <button class="btn" onclick="resetEditUpload()" style="margin-left: 10px; background: #6c757d; color: white;">重新选择</button>
+                    </div>
+                </div>
+
+                <div id="edit-result-area" class="hidden">
+                    <div id="edit-result-content"></div>
+                </div>
+
+                <div id="edit-alert"></div>
+            </div>
         </div>
 
         <!-- 地理位置测试标签页 -->

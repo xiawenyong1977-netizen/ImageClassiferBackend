@@ -233,6 +233,9 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
+    
+    // 初始化图片编辑上传
+    initImageEditUpload();
 });
 
 // 标签页切换
@@ -1758,6 +1761,256 @@ async function loadImageEditStats() {
         document.getElementById('image-edit-stats').innerHTML = `
             <div class="alert alert-error">加载失败: ${error.message}</div>
         `;
+    }
+}
+
+// ==================== 图像编辑测试功能 ====================
+
+let editSelectedFiles = [];
+let editCurrentTaskId = null;
+let editPollingInterval = null;
+
+// 初始化图片编辑上传
+function initImageEditUpload() {
+    const uploadArea = document.getElementById('edit-upload-area');
+    const fileInput = document.getElementById('edit-file-input');
+    
+    uploadArea.addEventListener('click', () => fileInput.click());
+    
+    // 拖拽上传
+    uploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadArea.style.borderColor = '#667eea';
+    });
+    
+    uploadArea.addEventListener('dragleave', () => {
+        uploadArea.style.borderColor = '#ddd';
+    });
+    
+    uploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadArea.style.borderColor = '#ddd';
+        const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+        handleEditFileSelect(files);
+    });
+    
+    fileInput.addEventListener('change', (e) => {
+        handleEditFileSelect(Array.from(e.target.files));
+    });
+}
+
+function handleEditFileSelect(files) {
+    if (files.length === 0) return;
+    if (files.length > 9) {
+        showEditAlert('最多只能选择9张图片', 'error');
+        return;
+    }
+    
+    editSelectedFiles = [];
+    const previewArea = document.getElementById('edit-preview-images');
+    previewArea.innerHTML = '';
+    
+    files.forEach((file, index) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            editSelectedFiles.push({
+                filename: file.name,
+                bytes: new Uint8Array(e.target.result)
+            });
+            
+            // 显示预览
+            const img = document.createElement('img');
+            img.src = e.target.result;
+            img.style.width = '100%';
+            img.style.height = '150px';
+            img.style.objectFit = 'cover';
+            img.style.borderRadius = '8px';
+            img.style.border = '2px solid #667eea';
+            previewArea.appendChild(img);
+        };
+        reader.readAsArrayBuffer(file);
+    });
+    
+    document.getElementById('edit-preview-area').classList.remove('hidden');
+}
+
+function resetEditUpload() {
+    editSelectedFiles = [];
+    document.getElementById('edit-file-input').value = '';
+    document.getElementById('edit-preview-area').classList.add('hidden');
+    document.getElementById('edit-result-area').classList.add('hidden');
+    document.getElementById('edit-upload-area').style.borderColor = '#ddd';
+    
+    // 停止轮询
+    if (editPollingInterval) {
+        clearInterval(editPollingInterval);
+        editPollingInterval = null;
+    }
+    editCurrentTaskId = null;
+}
+
+async function startImageEdit() {
+    if (editSelectedFiles.length === 0) {
+        showEditAlert('请先选择图片', 'error');
+        return;
+    }
+    
+    // 停止之前的轮询
+    if (editPollingInterval) {
+        clearInterval(editPollingInterval);
+        editPollingInterval = null;
+    }
+    editCurrentTaskId = null;
+    
+    try {
+        showEditAlert('正在提交编辑任务...', 'info');
+        
+        const formData = new FormData();
+        editSelectedFiles.forEach((file, index) => {
+            const blob = new Blob([file.bytes]);
+            formData.append('images', blob, file.filename);
+        });
+        
+        formData.append('edit_type', 'enhance');
+        formData.append('edit_params', JSON.stringify({
+            prompt: '修复面部瑕疵和皱纹，提亮肤色，保持人物原貌不变'
+        }));
+        
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/image-edit/submit`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) throw new Error('提交失败');
+        
+        const result = await response.json();
+        editCurrentTaskId = result.data.task_id;
+        
+        showEditAlert(`任务已提交，任务ID: ${editCurrentTaskId}`, 'success');
+        
+        // 开始轮询任务状态
+        startPollingTaskStatus();
+        
+    } catch (error) {
+        console.error('编辑失败:', error);
+        showEditAlert('提交编辑任务失败: ' + error.message, 'error');
+    }
+}
+
+function startPollingTaskStatus() {
+    // 立即检查一次
+    checkTaskStatus();
+    
+    // 每2秒轮询一次
+    editPollingInterval = setInterval(() => {
+        checkTaskStatus();
+    }, 2000);
+}
+
+async function checkTaskStatus() {
+    if (!editCurrentTaskId) {
+        console.log('没有任务ID，跳过查询');
+        return;
+    }
+    
+    try {
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/image-edit/task/${editCurrentTaskId}`);
+        
+        if (!response.ok) throw new Error('查询任务状态失败');
+        
+        const result = await response.json();
+        const task = result.data;
+        
+        console.log('查询任务状态:', editCurrentTaskId);
+        console.log('任务状态:', task);
+        
+        // 显示进度
+        showEditAlert(`进度: ${getStatusText(task.status)} (${Math.round(task.progress || 0)}%)`, 'info');
+        
+        // 如果完成，显示结果
+        if (task.status === 'completed') {
+            clearInterval(editPollingInterval);
+            editPollingInterval = null;
+            showEditResults(task);
+        } else if (task.status === 'failed') {
+            clearInterval(editPollingInterval);
+            editPollingInterval = null;
+            showEditAlert('编辑任务失败', 'error');
+        }
+        
+    } catch (error) {
+        console.error('查询任务状态失败:', error);
+        // 不显示错误，继续轮询
+    }
+}
+
+function getStatusText(status) {
+    const statusMap = {
+        'pending': '待处理',
+        'processing': '处理中',
+        'completed': '已完成',
+        'failed': '失败'
+    };
+    return statusMap[status] || status;
+}
+
+function showEditResults(task) {
+    const resultArea = document.getElementById('edit-result-area');
+    const content = document.getElementById('edit-result-content');
+    
+    if (!task.results || task.results.length === 0) {
+        content.innerHTML = '<p>没有结果</p>';
+        resultArea.classList.remove('hidden');
+        return;
+    }
+    
+    const resultsHtml = task.results.map((result, index) => {
+        if (result.status === 'failed') {
+            return `
+                <div style="background: #f8d7da; color: #721c24; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                    <p style="font-weight: bold;">图片 ${index + 1}: 处理失败</p>
+                    <p style="margin: 0;">${result.error || '未知错误'}</p>
+                </div>
+            `;
+        }
+        
+        return `
+            <div style="background: white; border: 2px solid #28a745; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                    <div>
+                        <p style="font-weight: bold; margin-bottom: 10px;">原图 ${index + 1}</p>
+                        <img src="${URL.createObjectURL(new Blob([editSelectedFiles[index].bytes]))}" 
+                             style="width: 100%; border-radius: 8px;" />
+                    </div>
+                    <div>
+                        <p style="font-weight: bold; margin-bottom: 10px;">精修后</p>
+                        <img src="${result.result_url}" 
+                             style="width: 100%; border-radius: 8px;" 
+                             onerror="this.src='/static/error.png'" />
+                        ${result.from_cache ? '<span style="background: #28a745; color: white; padding: 5px 10px; border-radius: 4px; font-size: 12px;">缓存</span>' : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    content.innerHTML = resultsHtml;
+    resultArea.classList.remove('hidden');
+    
+    showEditAlert('编辑完成！', 'success');
+}
+
+function showEditAlert(message, type) {
+    const alertDiv = document.getElementById('edit-alert');
+    const alertClass = type === 'error' ? 'alert-error' : type === 'success' ? 'alert-success' : 'alert-info';
+    
+    alertDiv.innerHTML = `<div class="alert ${alertClass}">${message}</div>`;
+    
+    // 3秒后自动消失（成功和错误消息）
+    if (type === 'success' || type === 'error') {
+        setTimeout(() => {
+            alertDiv.innerHTML = '';
+        }, 3000);
     }
 }
 
