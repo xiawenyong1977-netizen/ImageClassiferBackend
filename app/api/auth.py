@@ -6,6 +6,7 @@
 
 from datetime import timedelta
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 import requests
 import logging
@@ -119,8 +120,8 @@ async def wechat_verify(
     
     # 3. 将获得加密后的字符串与signature对比
     if hashcode == signature:
-        logger.info("微信服务器验证成功")
-        return echostr
+        logger.info(f"微信服务器验证成功, echostr={echostr}")
+        return PlainTextResponse(content=echostr)
     else:
         logger.warning(f"微信服务器验证失败: signature={signature}, hashcode={hashcode}")
         raise HTTPException(status_code=403, detail="验证失败")
