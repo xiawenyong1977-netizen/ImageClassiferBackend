@@ -461,25 +461,14 @@ class StatsService:
                 
                 overall = await cursor.fetchone()
                 
-                # 缓存统计（通过检查是否有相同的image_hash来判断）
+                # 缓存统计（从image_edit_cache表统计）
                 await cursor.execute("""
                     SELECT 
-                        COUNT(*) as total_api_calls,
-                        SUM(CASE WHEN t1.image_hash IN (
-                            SELECT DISTINCT t2.image_hash 
-                            FROM image_edit_tasks t2 
-                            WHERE t2.status = 'completed' 
-                              AND t2.id < t1.id
-                        ) THEN 1 ELSE 0 END) as cache_hits,
-                        SUM(CASE WHEN t1.image_hash NOT IN (
-                            SELECT DISTINCT t2.image_hash 
-                            FROM image_edit_tasks t2 
-                            WHERE t2.status = 'completed' 
-                              AND t2.id < t1.id
-                        ) THEN 1 ELSE 0 END) as cache_misses
-                    FROM image_edit_tasks t1
-                    WHERE DATE(t1.created_at) >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
-                      AND t1.status = 'completed'
+                        SUM(hit_count) as total_api_calls,
+                        SUM(hit_count - 1) as cache_hits,
+                        COUNT(*) as cache_misses
+                    FROM image_edit_cache
+                    WHERE DATE(created_at) >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
                 """, (days,))
                 
                 cache_stats = await cursor.fetchone()

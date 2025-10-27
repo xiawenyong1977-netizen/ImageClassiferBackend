@@ -21,8 +21,8 @@ from app.utils.hash_utils import calculate_hash
 class ImageEditService:
     """图像编辑服务"""
     
-    MAX_IMAGES_PER_BATCH = 3  # 阿里云限制
-    CONCURRENT_LIMIT = 3      # 并发限制
+    MAX_IMAGES_PER_BATCH = 9  # 最大图片数（虽然不会有批处理，但保留字段）
+    CONCURRENT_LIMIT = 1      # 串行处理，避免触发阿里云频率限制
     
     async def submit_task(
         self,
@@ -38,19 +38,14 @@ class ImageEditService:
         task_id = IDGenerator.generate_request_id("task")
         total_images = len(images)
         
-        # 计算第一张图片的哈希（用于缓存查询）
-        image_hash = None
-        if images and len(images) > 0:
-            image_hash = calculate_hash(images[0]['bytes'])
-        
         # 保存任务到数据库
         async with db.get_connection() as conn:
             async with conn.cursor() as cursor:
                 await cursor.execute(
                     """INSERT INTO image_edit_tasks 
-                       (task_id, user_id, image_hash, edit_type, edit_params, total_images, status) 
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                    (task_id, user_id, image_hash, edit_type, 
+                       (task_id, user_id, edit_type, edit_params, total_images, status) 
+                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                    (task_id, user_id, edit_type, 
                      json.dumps(edit_params), total_images, 'pending')
                 )
                 await conn.commit()
@@ -76,22 +71,18 @@ class ImageEditService:
         try:
             await self._update_status(task_id, 'processing')
             
-            # 分批处理
-            batches = self._split_into_batches(images, self.MAX_IMAGES_PER_BATCH)
+            # 串行处理每张图片
             all_results = []
             
-            for batch_index, batch in enumerate(batches):
-                logger.info(f"处理批次 {batch_index + 1}/{len(batches)}")
+            for index, image_data in enumerate(images):
+                logger.info(f"处理第 {index + 1}/{len(images)} 张图片")
                 
-                # 并发处理当前批次
-                batch_results = await self._process_batch_concurrently(
-                    batch_index * self.MAX_IMAGES_PER_BATCH,
-                    batch,
-                    edit_type,
-                    edit_params
+                # 处理单张图片
+                result = await self._edit_single_image(
+                    index, image_data, edit_type, edit_params
                 )
                 
-                all_results.extend(batch_results)
+                all_results.append(result)
                 
                 # 更新进度
                 await self._update_progress(task_id, len(all_results), len(images))
@@ -105,36 +96,7 @@ class ImageEditService:
             logger.error(f"编辑失败: {e}")
             await self._update_status(task_id, 'failed')
     
-    async def _process_batch_concurrently(
-        self,
-        start_index: int,
-        batch: List[Dict],
-        edit_type: str,
-        edit_params: Dict
-    ) -> List[Dict]:
-        """
-        并发处理一批图片
-        
-        注意：当前实现是分别对每张图片调用API，而不是一次性批量调用多张图片。
-        每张图片会单独调用一次 qwen-image-edit API，最多3个并发请求。
-        这样可以更好地控制配额，同时提高处理速度。
-        """
-        semaphore = asyncio.Semaphore(self.CONCURRENT_LIMIT)
-        
-        async def process_with_limit(index, image_data):
-            async with semaphore:
-                return await self._edit_single_image(
-                    index, image_data, edit_type, edit_params
-                )
-        
-        tasks = [
-            process_with_limit(i + start_index, img)
-            for i, img in enumerate(batch)
-        ]
-        
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        return [r for r in results if not isinstance(r, Exception)]
-    
+
     async def _edit_single_image(
         self,
         index: int,
@@ -174,7 +136,7 @@ class ImageEditService:
         edit_type: str,
         edit_params: Dict
     ) -> tuple[str, bool]:
-        """调用阿里云图像编辑API - 使用image_edit_tasks表做缓存
+        """调用阿里云图像编辑API - 使用image_edit_cache表做缓存
         
         Returns:
             tuple: (result_url, from_cache) - 结果URL和是否来自缓存
@@ -187,31 +149,33 @@ class ImageEditService:
         # 生成图片哈希
         image_hash = calculate_hash(image_bytes)
         
-        # 从image_edit_tasks表查询是否有相同的图片和提示词已处理完成
-        # 查询条件：相同的image_hash、edit_type、prompt、status为completed的结果
+        # 从image_edit_cache表查询缓存
         try:
             async with db.get_connection() as conn:
                 async with conn.cursor(aiomysql.DictCursor) as cursor:
                     await cursor.execute(
-                        """SELECT results, created_at 
-                           FROM image_edit_tasks 
-                           WHERE status = 'completed' 
-                             AND image_hash = %s
+                        """SELECT id, result_url 
+                           FROM image_edit_cache 
+                           WHERE image_hash = %s
                              AND edit_type = %s
-                             AND edit_params LIKE %s
-                           ORDER BY created_at DESC 
+                             AND prompt = %s
                            LIMIT 1""",
-                        (image_hash, edit_type, f'%"{prompt}"%')
+                        (image_hash, edit_type, prompt)
                     )
                     cached = await cursor.fetchone()
                     
-                    if cached and cached.get('results'):
-                        results = json.loads(cached['results'])
-                        if results and len(results) > 0:
-                            result_url = results[0].get('result_url')
-                            if result_url:
-                                logger.info(f"缓存命中: image_hash={image_hash[:16]}..., prompt={prompt[:50]}")
-                                return (result_url, True)  # 返回缓存结果
+                    if cached:
+                        # 更新命中次数
+                        await cursor.execute(
+                            """UPDATE image_edit_cache 
+                               SET hit_count = hit_count + 1,
+                                   last_hit_at = NOW()
+                               WHERE id = %s""",
+                            (cached['id'],)
+                        )
+                        await conn.commit()
+                        logger.info(f"缓存命中: image_hash={image_hash[:16]}..., prompt={prompt[:50]}")
+                        return (cached['result_url'], True)  # 返回缓存结果
         except Exception as e:
             logger.warning(f"缓存查询失败，将继续调用API: {e}")
         
@@ -253,6 +217,25 @@ class ImageEditService:
                     
                     # 下载并保存图片
                     download_url = await self._download_and_save_image(result_url)
+                    
+                    # 将结果写入缓存表
+                    try:
+                        async with db.get_connection() as conn:
+                            async with conn.cursor() as cursor:
+                                await cursor.execute(
+                                    """INSERT INTO image_edit_cache 
+                                       (image_hash, edit_type, prompt, result_url) 
+                                       VALUES (%s, %s, %s, %s)
+                                       ON DUPLICATE KEY UPDATE 
+                                         result_url = VALUES(result_url),
+                                         hit_count = hit_count,
+                                         updated_at = NOW()""",
+                                    (image_hash, edit_type, prompt, download_url)
+                                )
+                                await conn.commit()
+                                logger.info(f"缓存已写入: image_hash={image_hash[:16]}...")
+                    except Exception as e:
+                        logger.warning(f"缓存写入失败: {e}")
                     
                     return (download_url, False)  # 返回API调用结果
                 else:
@@ -318,10 +301,7 @@ class ImageEditService:
                 )
                 await conn.commit()
     
-    def _split_into_batches(self, images: List[Dict], batch_size: int) -> List[List[Dict]]:
-        """分批处理"""
-        return [images[i:i + batch_size] for i in range(0, len(images), batch_size)]
-    
+
     async def get_task_status(self, task_id: str) -> Optional[Dict]:
         """查询任务状态"""
         async with db.get_connection() as conn:
