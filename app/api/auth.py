@@ -81,6 +81,51 @@ class WeChatAuthResponse(BaseModel):
     avatar_url: str = None
 
 
+@router.get("/wechat/verify", summary="微信服务器配置验证")
+async def wechat_verify(
+    signature: str,
+    timestamp: str,
+    nonce: str,
+    echostr: str
+):
+    """
+    微信服务器配置验证接口
+    
+    用于微信公众号后台配置服务器URL时的验证
+    参数由微信服务器自动传入
+    
+    Args:
+        signature: 微信加密签名
+        timestamp: 时间戳
+        nonce: 随机数
+        echostr: 随机字符串（验证成功需原样返回）
+    
+    Returns:
+        echostr: 验证成功返回随机字符串
+    """
+    import hashlib
+    
+    # 微信服务器验证逻辑
+    token = settings.WECHAT_TOKEN
+    
+    # 1. 将token、timestamp、nonce三个参数进行字典序排序
+    tmp_arr = sorted([token, timestamp, nonce])
+    
+    # 2. 将三个参数字符串拼接成一个字符串进行sha1加密
+    tmp_str = ''.join(tmp_arr)
+    sha1 = hashlib.sha1()
+    sha1.update(tmp_str.encode('utf-8'))
+    hashcode = sha1.hexdigest()
+    
+    # 3. 将获得加密后的字符串与signature对比
+    if hashcode == signature:
+        logger.info("微信服务器验证成功")
+        return echostr
+    else:
+        logger.warning(f"微信服务器验证失败: signature={signature}, hashcode={hashcode}")
+        raise HTTPException(status_code=403, detail="验证失败")
+
+
 @router.post("/wechat", summary="微信授权登录")
 async def wechat_auth(request: WeChatAuthRequest):
     """
