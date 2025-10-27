@@ -1775,7 +1775,19 @@ function initImageEditUpload() {
     const uploadArea = document.getElementById('edit-upload-area');
     const fileInput = document.getElementById('edit-file-input');
     
-    uploadArea.addEventListener('click', () => fileInput.click());
+    // 检查元素是否存在
+    if (!uploadArea || !fileInput) {
+        console.warn('图片编辑上传元素未找到，跳过初始化');
+        return;
+    }
+    
+    console.log('初始化图片编辑上传功能...');
+    
+    // 点击上传区域时触发文件选择
+    uploadArea.addEventListener('click', (e) => {
+        e.preventDefault();
+        fileInput.click();
+    });
     
     // 拖拽上传
     uploadArea.addEventListener('dragover', (e) => {
@@ -1791,12 +1803,20 @@ function initImageEditUpload() {
         e.preventDefault();
         uploadArea.style.borderColor = '#ddd';
         const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
-        handleEditFileSelect(files);
+        if (files.length > 0) {
+            handleEditFileSelect(files);
+        }
     });
     
+    // 文件选择变化事件
     fileInput.addEventListener('change', (e) => {
-        handleEditFileSelect(Array.from(e.target.files));
+        const files = Array.from(e.target.files);
+        if (files.length > 0) {
+            handleEditFileSelect(files);
+        }
     });
+    
+    console.log('图片编辑上传功能初始化完成');
 }
 
 function handleEditFileSelect(files) {
@@ -1808,6 +1828,10 @@ function handleEditFileSelect(files) {
     
     editSelectedFiles = [];
     const previewArea = document.getElementById('edit-preview-images');
+    if (!previewArea) {
+        console.error('edit-preview-images元素未找到');
+        return;
+    }
     previewArea.innerHTML = '';
     
     files.forEach((file, index) => {
@@ -1831,7 +1855,10 @@ function handleEditFileSelect(files) {
         reader.readAsArrayBuffer(file);
     });
     
-    document.getElementById('edit-preview-area').classList.remove('hidden');
+    const previewAreaDiv = document.getElementById('edit-preview-area');
+    if (previewAreaDiv) {
+        previewAreaDiv.classList.remove('hidden');
+    }
 }
 
 function resetEditUpload() {
