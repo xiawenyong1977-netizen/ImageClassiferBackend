@@ -17,7 +17,8 @@ async def submit_edit(
     images: List[UploadFile] = File(...),
     edit_type: str = Form(...),
     edit_params: str = Form(...),
-    x_user_id: Optional[str] = Header(None, alias="X-User-ID")
+    x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
+    x_wechat_openid: Optional[str] = Header(None, alias="X-WeChat-OpenID")
 ):
     """
     提交编辑任务（支持单张或多张）
@@ -27,6 +28,7 @@ async def submit_edit(
         edit_type: 编辑类型（如 "remove"）
         edit_params: 编辑参数（JSON字符串）
         x_user_id: 用户ID（可选）
+        x_wechat_openid: 微信openid（必填，用于额度管理）
     
     Returns:
         task_id: 任务ID
@@ -57,7 +59,7 @@ async def submit_edit(
         
         # 提交任务
         task_id = await image_editor.submit_task(
-            image_data, edit_type, params, x_user_id
+            image_data, edit_type, params, x_user_id, x_wechat_openid
         )
         
         # 预估时间（使用原图，约18秒/张）

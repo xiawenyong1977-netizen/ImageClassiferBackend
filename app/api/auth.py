@@ -7,12 +7,19 @@
 from datetime import timedelta
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
+import requests
+import logging
+import aiomysql
 
 from app.auth import authenticate_user, create_access_token, Token
 from app.config import settings
+from app.database import db
 
-router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/v1/auth", tags=["认证"])
 
+
+# ===== 管理员登录 =====
 
 class LoginRequest(BaseModel):
     """登录请求"""
@@ -30,14 +37,6 @@ async def login(request: LoginRequest):
     - **password**: 密码
     
     **返回:** JWT访问token
-    
-    **示例:**
-    ```json
-    {
-      "username": "zywl",
-      "password": "zywl@123"
-    }
-    ```
     """
     # 验证用户名和密码
     if not authenticate_user(request.username, request.password):
@@ -63,8 +62,120 @@ async def login(request: LoginRequest):
 
 @router.post("/logout", summary="登出")
 async def logout():
-    """
-    登出接口（客户端删除token即可）
-    """
+    """登出接口（客户端删除token即可）"""
     return {"message": "登出成功"}
+
+
+# ===== 微信认证 =====
+
+
+class WeChatAuthRequest(BaseModel):
+    code: str
+
+
+class WeChatAuthResponse(BaseModel):
+    success: bool
+    openid: str
+    access_token: str
+    nickname: str = None
+    avatar_url: str = None
+
+
+@router.post("/wechat", summary="微信授权登录")
+async def wechat_auth(request: WeChatAuthRequest):
+    """
+    微信授权登录，获取openid
+    
+    1. 接收客户端传来的code
+    2. 调用微信API获取openid和access_token
+    3. 获取用户信息
+    4. 创建或更新用户记录
+    5. 返回openid和用户信息
+    """
+    try:
+        logger.info(f"微信授权请求: code={request.code[:20]}...")
+        
+        # 1. 调用微信API获取access_token
+        token_response = requests.get(
+            "https://api.weixin.qq.com/sns/oauth2/access_token",
+            params={
+                'appid': settings.WECHAT_APPID,
+                'secret': settings.WECHAT_SECRET,
+                'code': request.code,
+                'grant_type': 'authorization_code'
+            },
+            timeout=10
+        ).json()
+        
+        if 'errcode' in token_response:
+            logger.error(f"微信授权失败: {token_response}")
+            raise HTTPException(status_code=400, detail=token_response.get('errmsg', '授权失败'))
+        
+        openid = token_response['openid']
+        access_token = token_response['access_token']
+        logger.info(f"获取openid成功: {openid[:16]}...")
+        
+        # 2. 获取用户信息
+        user_info_response = requests.get(
+            "https://api.weixin.qq.com/sns/userinfo",
+            params={
+                'access_token': access_token,
+                'openid': openid,
+                'lang': 'zh_CN'
+            },
+            timeout=10
+        ).json()
+        
+        if 'errcode' in user_info_response:
+            logger.warning(f"获取用户信息失败: {user_info_response}")
+            # 如果获取用户信息失败，使用默认值
+            nickname = None
+            avatar_url = None
+        else:
+            nickname = user_info_response.get('nickname')
+            avatar_url = user_info_response.get('headimgurl')
+        
+        # 3. 创建或更新用户
+        async with db.get_connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
+                    """SELECT id FROM wechat_users WHERE openid = %s""",
+                    (openid,)
+                )
+                exists = await cursor.fetchone()
+                
+                if exists:
+                    # 更新用户信息
+                    await cursor.execute(
+                        """UPDATE wechat_users 
+                           SET nickname = %s, avatar_url = %s, last_active_time = NOW()
+                           WHERE openid = %s""",
+                        (nickname, avatar_url, openid)
+                    )
+                    logger.info(f"更新用户信息: openid={openid[:16]}...")
+                else:
+                    # 创建新用户（首次关注，给予100张额度）
+                    await cursor.execute(
+                        """INSERT INTO wechat_users 
+                           (openid, nickname, avatar_url, total_credits, remaining_credits, used_credits)
+                           VALUES (%s, %s, %s, 100, 100, 0)""",
+                        (openid, nickname, avatar_url)
+                    )
+                    logger.info(f"创建新用户: openid={openid[:16]}..., 额度=100")
+                
+                await conn.commit()
+        
+        return WeChatAuthResponse(
+            success=True,
+            openid=openid,
+            access_token=access_token,
+            nickname=nickname,
+            avatar_url=avatar_url
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"微信授权异常: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="授权失败")
 

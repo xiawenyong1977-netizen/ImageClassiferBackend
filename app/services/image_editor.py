@@ -29,7 +29,8 @@ class ImageEditService:
         images: List[Dict],
         edit_type: str,
         edit_params: Dict,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        openid: Optional[str] = None
     ) -> str:
         """提交编辑任务（同步处理，确保数据已写入数据库）"""
         
@@ -37,6 +38,24 @@ class ImageEditService:
         from app.utils.id_generator import IDGenerator
         task_id = IDGenerator.generate_request_id("task")
         total_images = len(images)
+        
+        # 检查用户额度（如果传入了openid）
+        if openid:
+            async with db.get_connection() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    await cursor.execute(
+                        """SELECT remaining_credits FROM wechat_users WHERE openid = %s""",
+                        (openid,)
+                    )
+                    user = await cursor.fetchone()
+                    
+                    if not user:
+                        raise ValueError("用户不存在")
+                    
+                    if user['remaining_credits'] < total_images:
+                        raise ValueError(
+                            f"额度不足：剩余{user['remaining_credits']}张，需要{total_images}张"
+                        )
         
         # 保存任务到数据库
         async with db.get_connection() as conn:
@@ -73,7 +92,7 @@ class ImageEditService:
                 await self._update_progress(task_id, len(all_results), len(images))
             
             # 保存结果
-            await self._save_results(task_id, all_results)
+            await self._save_results(task_id, all_results, openid)
             
             logger.info(f"任务同步处理完成: {task_id}")
             
@@ -278,14 +297,41 @@ class ImageEditService:
                 )
                 await conn.commit()
     
-    async def _save_results(self, task_id: str, results: List[Dict]):
-        """保存任务结果"""
+    async def _save_results(self, task_id: str, results: List[Dict], openid: Optional[str] = None):
+        """保存任务结果并扣除用户额度"""
         async with db.get_connection() as conn:
             async with conn.cursor() as cursor:
+                # 保存任务结果
                 await cursor.execute(
                     "UPDATE image_edit_tasks SET results = %s, status = %s WHERE task_id = %s",
                     (json.dumps(results), 'completed', task_id)
                 )
+                
+                # 如果传入了openid，扣除用户额度
+                if openid:
+                    # 统计成功的图片数量
+                    success_count = len([r for r in results if r.get('status') == 'completed'])
+                    
+                    if success_count > 0:
+                        # 扣除额度
+                        await cursor.execute(
+                            """UPDATE wechat_users 
+                               SET used_credits = used_credits + %s,
+                                   remaining_credits = remaining_credits - %s
+                               WHERE openid = %s""",
+                            (success_count, success_count, openid)
+                        )
+                        
+                        # 记录额度消耗
+                        await cursor.execute(
+                            """INSERT INTO credits_usage 
+                               (openid, task_id, task_type, credits_used)
+                               VALUES (%s, %s, 'image_edit', %s)""",
+                            (openid, task_id, success_count)
+                        )
+                        
+                        logger.info(f"已扣除额度: openid={openid[:16]}..., 扣除={success_count}张")
+                
                 await conn.commit()
     
 
