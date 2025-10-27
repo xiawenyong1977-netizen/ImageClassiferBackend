@@ -31,7 +31,7 @@ class ImageEditService:
         edit_params: Dict,
         user_id: Optional[str] = None
     ) -> str:
-        """提交编辑任务"""
+        """提交编辑任务（同步处理，确保数据已写入数据库）"""
         
         # 生成任务ID
         from app.utils.id_generator import IDGenerator
@@ -50,24 +50,9 @@ class ImageEditService:
                 )
                 await conn.commit()
         
-        logger.info(f"任务已创建: {task_id}, 图片数: {total_images}")
+        logger.info(f"任务已创建并提交到数据库: {task_id}, 图片数: {total_images}")
         
-        # 启动异步处理
-        asyncio.create_task(
-            self._execute_task(task_id, images, edit_type, edit_params, user_id)
-        )
-        
-        return task_id
-    
-    async def _execute_task(
-        self,
-        task_id: str,
-        images: List[Dict],
-        edit_type: str,
-        edit_params: Dict,
-        user_id: Optional[str]
-    ):
-        """执行编辑任务（异步后台处理）"""
+        # 同步处理任务（不启动后台任务）
         try:
             await self._update_status(task_id, 'processing')
             
@@ -90,11 +75,13 @@ class ImageEditService:
             # 保存结果
             await self._save_results(task_id, all_results)
             
-            logger.info(f"任务完成: {task_id}")
+            logger.info(f"任务同步处理完成: {task_id}")
             
         except Exception as e:
             logger.error(f"编辑失败: {e}")
             await self._update_status(task_id, 'failed')
+        
+        return task_id
     
 
     async def _edit_single_image(
