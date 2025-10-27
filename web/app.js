@@ -1785,8 +1785,11 @@ function initImageEditUpload() {
     
     // 点击上传区域时触发文件选择
     uploadArea.addEventListener('click', (e) => {
+        console.log('上传区域被点击');
         e.preventDefault();
+        console.log('触发文件选择器...');
         fileInput.click();
+        console.log('文件选择器已触发');
     });
     
     // 拖拽上传
@@ -1810,7 +1813,9 @@ function initImageEditUpload() {
     
     // 文件选择变化事件
     fileInput.addEventListener('change', (e) => {
+        console.log('文件选择变化事件触发');
         const files = Array.from(e.target.files);
+        console.log('选择的文件数量:', files.length);
         if (files.length > 0) {
             handleEditFileSelect(files);
         }
