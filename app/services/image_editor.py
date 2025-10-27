@@ -38,14 +38,19 @@ class ImageEditService:
         task_id = IDGenerator.generate_request_id("task")
         total_images = len(images)
         
+        # 计算第一张图片的哈希（用于缓存查询）
+        image_hash = None
+        if images and len(images) > 0:
+            image_hash = calculate_hash(images[0]['bytes'])
+        
         # 保存任务到数据库
         async with db.get_connection() as conn:
             async with conn.cursor() as cursor:
                 await cursor.execute(
                     """INSERT INTO image_edit_tasks 
-                       (task_id, user_id, edit_type, edit_params, total_images, status) 
-                       VALUES (%s, %s, %s, %s, %s, %s)""",
-                    (task_id, user_id, edit_type, 
+                       (task_id, user_id, image_hash, edit_type, edit_params, total_images, status) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (task_id, user_id, image_hash, edit_type, 
                      json.dumps(edit_params), total_images, 'pending')
                 )
                 await conn.commit()
@@ -172,7 +177,7 @@ class ImageEditService:
         image_hash = calculate_hash(image_bytes)
         
         # 从image_edit_tasks表查询是否有相同的图片和提示词已处理完成
-        # 查询条件：相同的edit_type、相同的prompt、status为completed的结果
+        # 查询条件：相同的image_hash、edit_type、prompt、status为completed的结果
         try:
             async with db.get_connection() as conn:
                 async with conn.cursor(aiomysql.DictCursor) as cursor:
@@ -180,19 +185,18 @@ class ImageEditService:
                         """SELECT results, created_at 
                            FROM image_edit_tasks 
                            WHERE status = 'completed' 
+                             AND image_hash = %s
                              AND edit_type = %s
                              AND edit_params LIKE %s
                            ORDER BY created_at DESC 
                            LIMIT 1""",
-                        (edit_type, f'%"{prompt}"%')
+                        (image_hash, edit_type, f'%"{prompt}"%')
                     )
                     cached = await cursor.fetchone()
                     
                     if cached and cached.get('results'):
                         results = json.loads(cached['results'])
                         if results and len(results) > 0:
-                            # 检查结果中的图片是否是同一张（通过对比URL或索引）
-                            # 简单策略：返回第一个结果
                             result_url = results[0].get('result_url')
                             if result_url:
                                 logger.info(f"缓存命中: image_hash={image_hash[:16]}..., prompt={prompt[:50]}")

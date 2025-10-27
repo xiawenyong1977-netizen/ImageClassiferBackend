@@ -96,3 +96,22 @@ async def get_batch_classify_stats(
         logger.error(f"获取批量分类统计失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.get("/image-edit", summary="获取图片编辑统计")
+async def get_image_edit_stats(
+    days: int = 7,
+    current_user: str = Depends(get_current_user)
+):
+    """
+    获取图片编辑统计（需要认证）
+    
+    Args:
+        days: 查询最近几天的数据，默认7天
+    """
+    try:
+        stats = await stats_service.get_image_edit_stats(days=days)
+        return {"success": True, "data": stats}
+    except Exception as e:
+        logger.error(f"获取图片编辑统计失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

@@ -433,6 +433,120 @@ class StatsService:
                 },
                 "daily": []
             }
+    
+    async def get_image_edit_stats(self, days: int = 7) -> dict:
+        """
+        获取图片编辑统计
+        
+        Args:
+            days: 查询最近几天的数据
+            
+        Returns:
+            统计数据
+        """
+        try:
+            async with db.get_cursor() as cursor:
+                # 总体统计
+                await cursor.execute("""
+                    SELECT 
+                        COUNT(*) as total_tasks,
+                        SUM(total_images) as total_images,
+                        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_tasks,
+                        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_tasks,
+                        SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing_tasks,
+                        ROUND(AVG(total_images), 2) as avg_images_per_task
+                    FROM image_edit_tasks
+                    WHERE DATE(created_at) >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+                """, (days,))
+                
+                overall = await cursor.fetchone()
+                
+                # 缓存统计（通过检查是否有相同的image_hash来判断）
+                await cursor.execute("""
+                    SELECT 
+                        COUNT(*) as total_api_calls,
+                        SUM(CASE WHEN t1.image_hash IN (
+                            SELECT DISTINCT t2.image_hash 
+                            FROM image_edit_tasks t2 
+                            WHERE t2.status = 'completed' 
+                              AND t2.id < t1.id
+                        ) THEN 1 ELSE 0 END) as cache_hits,
+                        SUM(CASE WHEN t1.image_hash NOT IN (
+                            SELECT DISTINCT t2.image_hash 
+                            FROM image_edit_tasks t2 
+                            WHERE t2.status = 'completed' 
+                              AND t2.id < t1.id
+                        ) THEN 1 ELSE 0 END) as cache_misses
+                    FROM image_edit_tasks t1
+                    WHERE DATE(t1.created_at) >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+                      AND t1.status = 'completed'
+                """, (days,))
+                
+                cache_stats = await cursor.fetchone()
+                
+                # 每日统计
+                await cursor.execute("""
+                    SELECT 
+                        DATE(created_at) as created_date,
+                        COUNT(*) as tasks,
+                        SUM(total_images) as images,
+                        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+                    FROM image_edit_tasks
+                    WHERE DATE(created_at) >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+                    GROUP BY DATE(created_at)
+                    ORDER BY created_date DESC
+                """, (days,))
+                
+                daily = await cursor.fetchall()
+                
+                total_api_calls = cache_stats['total_api_calls'] or 0
+                cache_hits = cache_stats['cache_hits'] or 0
+                cache_misses = cache_stats['cache_misses'] or 0
+                
+                return {
+                    "overall": {
+                        "total_tasks": overall['total_tasks'] or 0,
+                        "total_images": overall['total_images'] or 0,
+                        "completed_tasks": overall['completed_tasks'] or 0,
+                        "failed_tasks": overall['failed_tasks'] or 0,
+                        "processing_tasks": overall['processing_tasks'] or 0,
+                        "avg_images_per_task": float(overall['avg_images_per_task'] or 0)
+                    },
+                    "cache": {
+                        "total_calls": total_api_calls,
+                        "cache_hits": cache_hits,
+                        "cache_misses": cache_misses,
+                        "hit_rate": float((cache_hits * 100.0 / total_api_calls) if total_api_calls > 0 else 0)
+                    },
+                    "daily": [
+                        {
+                            "date": str(row['created_date']),
+                            "tasks": row['tasks'],
+                            "images": row['images'],
+                            "completed": row['completed']
+                        }
+                        for row in daily
+                    ]
+                }
+        except Exception as e:
+            logger.error(f"获取图片编辑统计失败: {e}")
+            return {
+                "overall": {
+                    "total_tasks": 0,
+                    "total_images": 0,
+                    "completed_tasks": 0,
+                    "failed_tasks": 0,
+                    "processing_tasks": 0,
+                    "avg_images_per_task": 0
+                },
+                "cache": {
+                    "total_calls": 0,
+                    "cache_hits": 0,
+                    "cache_misses": 0,
+                    "hit_rate": 0
+                },
+                "daily": []
+            }
 
 
 # 全局统计服务实例

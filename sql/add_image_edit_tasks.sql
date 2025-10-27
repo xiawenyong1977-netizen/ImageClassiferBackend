@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS `image_edit_tasks` (
   -- 任务标识
   `task_id` VARCHAR(64) NOT NULL COMMENT '任务唯一ID',
   `user_id` VARCHAR(64) DEFAULT NULL COMMENT '用户ID',
+  `image_hash` VARCHAR(64) DEFAULT NULL COMMENT '图片SHA-256哈希值（用于缓存）',
   
   -- 编辑配置
   `edit_type` VARCHAR(32) NOT NULL COMMENT '编辑类型（如：remove, expand等）',
@@ -34,6 +35,8 @@ CREATE TABLE IF NOT EXISTS `image_edit_tasks` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_task_id` (`task_id`),
   KEY `idx_user_id` (`user_id`),
+  KEY `idx_image_hash` (`image_hash`),
+  KEY `idx_cache_query` (`image_hash`, `status`, `edit_type`),
   KEY `idx_status` (`status`),
   KEY `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

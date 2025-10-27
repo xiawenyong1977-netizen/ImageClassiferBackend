@@ -159,6 +159,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadInferenceMethodStats();
     loadBatchCacheStats();
     loadBatchClassifyStats();
+    loadImageEditStats();
     
     // 自动刷新统计（每30秒）
     setInterval(() => {
@@ -169,6 +170,7 @@ document.addEventListener('DOMContentLoaded', function() {
             loadInferenceMethodStats();
             loadBatchCacheStats();
             loadBatchClassifyStats();
+            loadImageEditStats();
         }
     }, 30000);
     
@@ -257,6 +259,7 @@ function showTab(tabName) {
         loadInferenceMethodStats();
         loadBatchCacheStats();
         loadBatchClassifyStats();
+        loadImageEditStats();
     }
     
     // 如果切换到地理位置页，加载位置统计
@@ -1658,6 +1661,103 @@ function showReleaseAlert(message, type = 'info') {
         setTimeout(() => {
             alertDiv.innerHTML = '';
         }, 3000);
+    }
+}
+
+// 加载图片编辑统计
+async function loadImageEditStats() {
+    try {
+        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/stats/image-edit?days=7`);
+        const data = await response.json();
+        const stats = data.data;
+        
+        const overall = stats.overall || {};
+        const cache = stats.cache || {};
+        
+        document.getElementById('image-edit-stats').innerHTML = `
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon">🎨</div>
+                    <div class="stat-value">${formatNumber(overall.total_tasks || 0)}</div>
+                    <div class="stat-label">编辑任务总数</div>
+                    <div class="stat-trend" style="color: #667eea;">最近7天</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🖼️</div>
+                    <div class="stat-value">${formatNumber(overall.total_images || 0)}</div>
+                    <div class="stat-label">编辑图片总数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">✅</div>
+                    <div class="stat-value">${formatNumber(overall.completed_tasks || 0)}</div>
+                    <div class="stat-label">已完成任务</div>
+                    <div class="stat-trend" style="color: #28a745;">
+                        ${overall.total_tasks > 0 ? ((overall.completed_tasks / overall.total_tasks * 100).toFixed(1)) : 0}%
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">📊</div>
+                    <div class="stat-value">${(overall.avg_images_per_task || 0).toFixed(1)}</div>
+                    <div class="stat-label">平均图片数</div>
+                    <div class="stat-trend" style="color: #667eea;">张/任务</div>
+                </div>
+            </div>
+            
+            <div class="stats-grid" style="margin-top: 20px;">
+                <div class="stat-card" style="border-left: 4px solid #28a745;">
+                    <div class="stat-icon">🎯</div>
+                    <div class="stat-value">${formatNumber(cache.cache_hits || 0)}</div>
+                    <div class="stat-label">缓存命中</div>
+                    <div class="stat-trend" style="color: #28a745;">${(cache.hit_rate || 0).toFixed(1)}%</div>
+                </div>
+                <div class="stat-card" style="border-left: 4px solid #ffc107;">
+                    <div class="stat-icon">🔍</div>
+                    <div class="stat-value">${formatNumber(cache.cache_misses || 0)}</div>
+                    <div class="stat-label">缓存未命中</div>
+                    <div class="stat-trend" style="color: #ffc107;">
+                        ${cache.total_calls > 0 ? ((cache.cache_misses / cache.total_calls * 100).toFixed(1)) : 0}%
+                    </div>
+                </div>
+                <div class="stat-card" style="border-left: 4px solid #17a2b8;">
+                    <div class="stat-icon">📞</div>
+                    <div class="stat-value">${formatNumber(cache.total_calls || 0)}</div>
+                    <div class="stat-label">API调用总数</div>
+                </div>
+            </div>
+            
+            ${stats.daily && stats.daily.length > 0 ? `
+                <div style="margin-top: 20px;">
+                    <h3 style="margin-bottom: 10px;">📈 每日统计</h3>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">
+                                <th style="padding: 12px; text-align: left;">日期</th>
+                                <th style="padding: 12px; text-align: center;">任务数</th>
+                                <th style="padding: 12px; text-align: center;">图片数</th>
+                                <th style="padding: 12px; text-align: center;">已完成</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${stats.daily.map((day, index) => `
+                                <tr style="background: ${index % 2 === 0 ? '#ffffff' : '#f8f9fa'}; border-bottom: 1px solid #dee2e6;">
+                                    <td style="padding: 12px;">${day.date}</td>
+                                    <td style="padding: 12px; text-align: center;">${day.tasks}</td>
+                                    <td style="padding: 12px; text-align: center;">${day.images}</td>
+                                    <td style="padding: 12px; text-align: center;">
+                                        <span style="color: #28a745;">${day.completed}</span>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            ` : '<p style="text-align: center; color: #999; padding: 20px;">暂无数据</p>'}
+        `;
+        
+    } catch (error) {
+        document.getElementById('image-edit-stats').innerHTML = `
+            <div class="alert alert-error">加载失败: ${error.message}</div>
+        `;
     }
 }
 
