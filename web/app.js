@@ -1777,20 +1777,11 @@ function initImageEditUpload() {
     
     // 检查元素是否存在
     if (!uploadArea || !fileInput) {
-        console.warn('图片编辑上传元素未找到，跳过初始化');
         return;
     }
     
-    console.log('初始化图片编辑上传功能...');
-    
     // 点击上传区域时触发文件选择
-    uploadArea.addEventListener('click', (e) => {
-        console.log('上传区域被点击');
-        e.preventDefault();
-        console.log('触发文件选择器...');
-        fileInput.click();
-        console.log('文件选择器已触发');
-    });
+    uploadArea.addEventListener('click', () => fileInput.click());
     
     // 拖拽上传
     uploadArea.addEventListener('dragover', (e) => {
@@ -1805,26 +1796,21 @@ function initImageEditUpload() {
     uploadArea.addEventListener('drop', (e) => {
         e.preventDefault();
         uploadArea.style.borderColor = '#ddd';
-        const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
-        if (files.length > 0) {
-            handleEditFileSelect(files);
+        
+        if (e.dataTransfer.files.length > 0) {
+            fileInput.files = e.dataTransfer.files;
+            handleEditFileSelect();
         }
     });
     
     // 文件选择变化事件
-    fileInput.addEventListener('change', (e) => {
-        console.log('文件选择变化事件触发');
-        const files = Array.from(e.target.files);
-        console.log('选择的文件数量:', files.length);
-        if (files.length > 0) {
-            handleEditFileSelect(files);
-        }
-    });
-    
-    console.log('图片编辑上传功能初始化完成');
+    fileInput.addEventListener('change', handleEditFileSelect);
 }
 
-function handleEditFileSelect(files) {
+function handleEditFileSelect() {
+    const fileInput = document.getElementById('edit-file-input');
+    const files = Array.from(fileInput.files);
+    
     if (files.length === 0) return;
     if (files.length > 9) {
         showEditAlert('最多只能选择9张图片', 'error');
@@ -1840,12 +1826,25 @@ function handleEditFileSelect(files) {
     previewArea.innerHTML = '';
     
     files.forEach((file, index) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            editSelectedFiles.push({
-                filename: file.name,
-                bytes: new Uint8Array(e.target.result)
-            });
+        // 先创建一个空的对象占位
+        const fileData = {
+            filename: file.name,
+            bytes: null,
+            dataUrl: null
+        };
+        editSelectedFiles.push(fileData);
+        
+        // 读取文件数据用于上传
+        const dataReader = new FileReader();
+        dataReader.onload = (e) => {
+            fileData.bytes = new Uint8Array(e.target.result);
+        };
+        dataReader.readAsArrayBuffer(file);
+        
+        // 读取文件用于预览
+        const previewReader = new FileReader();
+        previewReader.onload = (e) => {
+            fileData.dataUrl = e.target.result;
             
             // 显示预览
             const img = document.createElement('img');
@@ -1857,7 +1856,7 @@ function handleEditFileSelect(files) {
             img.style.border = '2px solid #667eea';
             previewArea.appendChild(img);
         };
-        reader.readAsArrayBuffer(file);
+        previewReader.readAsDataURL(file);
     });
     
     const previewAreaDiv = document.getElementById('edit-preview-area');
@@ -1913,10 +1912,22 @@ async function startImageEdit() {
             body: formData
         });
         
-        if (!response.ok) throw new Error('提交失败');
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('提交失败，响应:', errorText);
+            throw new Error(`提交失败: ${response.status} ${response.statusText}`);
+        }
         
         const result = await response.json();
-        editCurrentTaskId = result.data.task_id;
+        console.log('提交响应:', result);
+        
+        // 服务端返回格式：{success: true, task_id: '...', ...}
+        editCurrentTaskId = result.task_id;
+        
+        if (!editCurrentTaskId) {
+            console.error('响应中没有task_id:', result);
+            throw new Error('服务器返回格式错误');
+        }
         
         showEditAlert(`任务已提交，任务ID: ${editCurrentTaskId}`, 'success');
         
@@ -1930,13 +1941,16 @@ async function startImageEdit() {
 }
 
 function startPollingTaskStatus() {
-    // 立即检查一次
-    checkTaskStatus();
-    
-    // 每2秒轮询一次
-    editPollingInterval = setInterval(() => {
+    // 延迟0.5秒后开始轮询，确保数据库写入完成
+    setTimeout(() => {
+        // 立即检查一次
         checkTaskStatus();
-    }, 2000);
+        
+        // 每2秒轮询一次
+        editPollingInterval = setInterval(() => {
+            checkTaskStatus();
+        }, 2000);
+    }, 500);
 }
 
 async function checkTaskStatus() {
@@ -1948,10 +1962,18 @@ async function checkTaskStatus() {
     try {
         const response = await authFetch(`${currentConfig.apiUrl}/api/v1/image-edit/task/${editCurrentTaskId}`);
         
+        // 如果任务不存在（404），停止轮询
+        if (response.status === 404) {
+            console.warn('任务不存在，停止轮询:', editCurrentTaskId);
+            clearInterval(editPollingInterval);
+            editPollingInterval = null;
+            editCurrentTaskId = null;
+            return;
+        }
+        
         if (!response.ok) throw new Error('查询任务状态失败');
         
-        const result = await response.json();
-        const task = result.data;
+        const task = await response.json();
         
         console.log('查询任务状态:', editCurrentTaskId);
         console.log('任务状态:', task);
@@ -2006,13 +2028,13 @@ function showEditResults(task) {
             `;
         }
         
+        const originalUrl = editSelectedFiles[index]?.dataUrl || '';
         return `
             <div style="background: white; border: 2px solid #28a745; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
                     <div>
                         <p style="font-weight: bold; margin-bottom: 10px;">原图 ${index + 1}</p>
-                        <img src="${URL.createObjectURL(new Blob([editSelectedFiles[index].bytes]))}" 
-                             style="width: 100%; border-radius: 8px;" />
+                        ${originalUrl ? `<img src="${originalUrl}" style="width: 100%; border-radius: 8px;" onerror="this.src='/static/error.png'" />` : '<p style="color: #999;">原图不可用</p>'}
                     </div>
                     <div>
                         <p style="font-weight: bold; margin-bottom: 10px;">精修后</p>

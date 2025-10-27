@@ -304,22 +304,27 @@ class ImageEditService:
 
     async def get_task_status(self, task_id: str) -> Optional[Dict]:
         """查询任务状态"""
-        async with db.get_connection() as conn:
-            async with conn.cursor(aiomysql.DictCursor) as cursor:
-                await cursor.execute(
-                    "SELECT task_id, user_id, edit_type, edit_params, total_images, "
-                    "completed_images, progress, status, results, created_at, updated_at "
-                    "FROM image_edit_tasks WHERE task_id = %s",
-                    (task_id,)
-                )
-                result = await cursor.fetchone()
-                if result:
-                    if result.get('edit_params'):
-                        result['edit_params'] = json.loads(result['edit_params'])
-                    if result.get('results'):
-                        result['results'] = json.loads(result['results'])
-                    return result
-                return None
+        try:
+            async with db.get_connection() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    await cursor.execute(
+                        "SELECT task_id, user_id, edit_type, edit_params, total_images, "
+                        "completed_images, progress, status, results, created_at, updated_at "
+                        "FROM image_edit_tasks WHERE task_id = %s",
+                        (task_id,)
+                    )
+                    result = await cursor.fetchone()
+                    if result:
+                        if result.get('edit_params'):
+                            result['edit_params'] = json.loads(result['edit_params'])
+                        if result.get('results'):
+                            result['results'] = json.loads(result['results'])
+                        return result
+                    logger.warning(f"任务不存在: {task_id}")
+                    return None
+        except Exception as e:
+            logger.error(f"查询任务状态失败: {task_id}, 错误: {e}")
+            return None
 
 
 # 全局服务实例
