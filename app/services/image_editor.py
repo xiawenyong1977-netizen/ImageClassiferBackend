@@ -112,7 +112,13 @@ class ImageEditService:
         edit_type: str,
         edit_params: Dict
     ) -> List[Dict]:
-        """并发处理一批图片"""
+        """
+        并发处理一批图片
+        
+        注意：当前实现是分别对每张图片调用API，而不是一次性批量调用多张图片。
+        每张图片会单独调用一次 qwen-image-edit API，最多3个并发请求。
+        这样可以更好地控制配额，同时提高处理速度。
+        """
         semaphore = asyncio.Semaphore(self.CONCURRENT_LIMIT)
         
         async def process_with_limit(index, image_data):
@@ -141,8 +147,8 @@ class ImageEditService:
             # 直接使用内存中的原图数据
             image_bytes = image_data['bytes']
             
-            # 调用阿里云API
-            result_url = await self._call_aliyun_api(
+            # 调用阿里云API，返回 (result_url, from_cache)
+            result_url, from_cache = await self._call_aliyun_api(
                 image_bytes, edit_type, edit_params
             )
             
@@ -150,7 +156,8 @@ class ImageEditService:
                 'index': index,
                 'filename': image_data['filename'],
                 'status': 'completed',
-                'result_url': result_url
+                'result_url': result_url,
+                'from_cache': from_cache
             }
         except Exception as e:
             logger.error(f"图片 {index} 处理失败: {e}")
@@ -166,8 +173,12 @@ class ImageEditService:
         image_bytes: bytes,
         edit_type: str,
         edit_params: Dict
-    ) -> str:
-        """调用阿里云图像编辑API - 使用image_edit_tasks表做缓存"""
+    ) -> tuple[str, bool]:
+        """调用阿里云图像编辑API - 使用image_edit_tasks表做缓存
+        
+        Returns:
+            tuple: (result_url, from_cache) - 结果URL和是否来自缓存
+        """
         dashscope.api_key = settings.LLM_API_KEY
         
         image_base64 = base64.b64encode(image_bytes).decode('utf-8')
@@ -200,7 +211,7 @@ class ImageEditService:
                             result_url = results[0].get('result_url')
                             if result_url:
                                 logger.info(f"缓存命中: image_hash={image_hash[:16]}..., prompt={prompt[:50]}")
-                                return result_url
+                                return (result_url, True)  # 返回缓存结果
         except Exception as e:
             logger.warning(f"缓存查询失败，将继续调用API: {e}")
         
@@ -243,7 +254,7 @@ class ImageEditService:
                     # 下载并保存图片
                     download_url = await self._download_and_save_image(result_url)
                     
-                    return download_url
+                    return (download_url, False)  # 返回API调用结果
                 else:
                     raise Exception(f"API返回格式错误: {result}")
             else:
