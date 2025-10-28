@@ -1,0 +1,131 @@
+微信扫码关注功能部署清单
+========================================
+
+【重要】部署前请确保：
+1. 已配置好服务器SSH访问
+2. 服务器上已有项目代码
+3. MySQL数据库已配置
+
+========================================
+一、需要上传的文件列表
+========================================
+
+1. app/main.py                    # 主程序（添加了微信GET路由）
+2. app/api/auth.py                # 认证API（微信相关接口）
+3. app/api/user.py                # 用户API（额度查询）
+4. app/api/image_edit.py          # 图片编辑API
+5. app/services/image_editor.py   # 图片编辑服务
+6. app/config.py                  # 配置文件
+7. sql/add_wechat_qrcode_bindings.sql  # 数据库表
+
+========================================
+二、服务器端操作步骤
+========================================
+
+步骤1：上传文件
+-------------------
+方式1：使用SCP命令（在本地执行）
+scp app/main.py root@your_server:/path/to/ImageClassifierBackend/app/
+scp app/api/auth.py root@your_server:/path/to/ImageClassifierBackend/app/api/
+scp app/api/user.py root@your_server:/path/to/ImageClassifierBackend/app/api/
+scp app/api/image_edit.py root@your_server:/path/to/ImageClassifierBackend/app/api/
+scp app/services/image_editor.py root@your_server:/path/to/ImageClassifierBackend/app/services/
+scp app/config.py root@your_server:/path/to/ImageClassifierBackend/app/
+scp sql/add_wechat_qrcode_bindings.sql root@your_server:/path/to/ImageClassifierBackend/sql/
+
+方式2：通过Git（在服务器执行）
+cd /path/to/ImageClassifierBackend
+git pull origin main
+
+步骤2：创建数据库表（在服务器上执行）
+-------------------
+mysql -u root -p your_database < sql/add_wechat_qrcode_bindings.sql
+
+步骤3：检查环境变量（在服务器上执行）
+-------------------
+cd /path/to/ImageClassifierBackend
+cat .env | grep WECHAT
+
+# 确保包含以下配置：
+# WECHAT_APPID=your_appid
+# WECHAT_SECRET=your_secret
+# WECHAT_TOKEN=your_token
+
+步骤4：重启服务（在服务器上执行）
+-------------------
+方式1：使用重启脚本
+cd /path/to/ImageClassifierBackend
+bash deploy-to-server.sh
+
+方式2：使用systemctl
+sudo systemctl restart imageclassifier
+
+方式3：使用pm2
+pm2 restart imageclassifier
+
+步骤5：验证部署（在服务器上执行）
+-------------------
+# 检查健康状态
+curl https://admin.xintuxiangce.top/api/v1/health
+
+# 测试微信验证接口（GET）
+curl "https://admin.xintuxiangce.top/api/v1/auth/wechat/verify?signature=test&timestamp=test&nonce=test&echostr=test"
+
+========================================
+三、微信公众号配置
+========================================
+
+1. 登录微信公众平台：https://mp.weixin.qq.com/
+2. 进入「开发」-「基本配置」
+3. 配置服务器URL：
+   URL: https://admin.xintuxiangce.top/api/v1/auth/wechat/verify
+   Token: [填写您的WECHAT_TOKEN]
+   消息加解密方式: 明文模式
+4. 点击「提交」按钮
+5. 如果提示验证成功，说明部署成功
+
+========================================
+四、测试步骤
+========================================
+
+1. 测试生成二维码接口：
+curl -X POST https://admin.xintuxiangce.top/api/v1/auth/wechat/qrcode \
+  -H "Content-Type: application/json" \
+  -d '{"client_id": "test_001"}'
+
+2. 测试检查关注状态：
+curl "https://admin.xintuxiangce.top/api/v1/auth/wechat/check-follow?client_id=test_001"
+
+3. 测试用户额度查询：
+curl https://admin.xintuxiangce.top/api/v1/user/credits \
+  -H "X-WeChat-OpenID: test_openid"
+
+========================================
+五、常见问题排查
+========================================
+
+问题1：微信验证失败（返回非200）
+解决：检查WECHAT_TOKEN是否配置正确，查看服务器日志
+
+问题2：用户关注后无法绑定
+解决：检查数据库表wechat_qrcode_bindings是否存在，查看日志
+
+问题3：额度扣减失败
+解决：检查wechat_users表是否存在，openid是否正确传递
+
+问题4：服务启动失败
+解决：检查Python依赖、环境变量配置、数据库连接
+
+========================================
+六、回滚操作（如果需要）
+========================================
+
+如果部署失败，可以通过Git回滚：
+cd /path/to/ImageClassifierBackend
+git checkout HEAD -- app/
+git checkout HEAD -- app/api/
+git checkout HEAD -- app/services/
+
+然后重启服务即可。
+
+========================================

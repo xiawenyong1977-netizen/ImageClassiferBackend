@@ -2,7 +2,7 @@
 FastAPI应用主入口
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -14,6 +14,7 @@ import os
 from app.config import settings
 from app.database import db
 from app.api import classify, stats, health, location, auth, local_classify, config, release, image_edit, user
+from app.api.auth import wechat_message_handler, wechat_verify
 
 
 # 配置日志
@@ -87,6 +88,23 @@ app.include_router(stats.router)
 app.include_router(health.router)
 app.include_router(location.router)
 app.include_router(image_edit.router)  # 图像编辑
+
+# 微信公众号服务器配置验证接口（GET请求）
+@app.get("/api/v1/auth/wechat/verify", summary="微信服务器配置验证")
+async def wechat_verify_endpoint(
+    signature: str,
+    timestamp: str,
+    nonce: str,
+    echostr: str
+):
+    """微信服务器配置验证接口（GET请求）"""
+    return await wechat_verify(signature, timestamp, nonce, echostr)
+
+# 微信公众号消息推送接收接口（POST请求）
+@app.post("/api/v1/auth/wechat/verify", summary="微信公众号消息推送")
+async def wechat_message_push(request: Request):
+    """接收微信公众号的消息推送（POST请求）"""
+    return await wechat_message_handler(request)
 
 # 静态文件服务（Web管理界面）
 web_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")
