@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>我的额度 - 芯图相册</title>
     <style>
         * {
@@ -364,10 +367,15 @@
             addDebugLog('开始加载额度信息，openid: ' + openid.substring(0, 16) + '...');
 
             try {
-                const response = await fetch(`${API_BASE_URL}/user/credits`, {
+                // 添加时间戳防止缓存
+                const timestamp = new Date().getTime();
+                const response = await fetch(`${API_BASE_URL}/user/credits?t=${timestamp}`, {
                     headers: {
-                        'X-WeChat-OpenID': openid
-                    }
+                        'X-WeChat-OpenID': openid,
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache'
+                    },
+                    cache: 'no-store'
                 });
                 
                 addDebugLog('获取额度响应状态: ' + response.status);
@@ -434,10 +442,15 @@
             const historyCard = document.getElementById('historyCard');
             
             try {
-                const response = await fetch(`${API_BASE_URL}/user/credits-usage`, {
+                // 添加时间戳防止缓存
+                const timestamp = new Date().getTime();
+                const response = await fetch(`${API_BASE_URL}/user/credits-usage?t=${timestamp}`, {
                     headers: {
-                        'X-WeChat-OpenID': openid
-                    }
+                        'X-WeChat-OpenID': openid,
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache'
+                    },
+                    cache: 'no-store'
                 });
                 
                 const result = await response.json();

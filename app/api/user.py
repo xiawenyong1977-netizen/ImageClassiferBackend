@@ -2,7 +2,8 @@
 用户管理相关API
 """
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Response
+from fastapi.responses import JSONResponse
 import logging
 import aiomysql
 
@@ -70,7 +71,8 @@ async def get_user_credits(
                 if not user:
                     raise HTTPException(status_code=404, detail="用户不存在")
                 
-                return {
+                # 设置防缓存响应头
+                response_data = {
                     "success": True,
                     "total_credits": user['total_credits'],
                     "used_credits": user['used_credits'],
@@ -78,6 +80,11 @@ async def get_user_credits(
                     "is_member": bool(user['is_member']),
                     "member_expire_at": str(user['member_expire_at']) if user['member_expire_at'] else None
                 }
+                response = JSONResponse(content=response_data)
+                response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                response.headers["Pragma"] = "no-cache"
+                response.headers["Expires"] = "0"
+                return response
                 
     except HTTPException:
         raise
@@ -193,11 +200,17 @@ async def get_credits_usage(
                         "created_at": str(record['created_at']) if record['created_at'] else None
                     })
                 
-                return {
+                # 设置防缓存响应头
+                response_data = {
                     "success": True,
                     "data": result,
                     "count": len(result)
                 }
+                response = JSONResponse(content=response_data)
+                response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                response.headers["Pragma"] = "no-cache"
+                response.headers["Expires"] = "0"
+                return response
                 
     except Exception as e:
         logger.error(f"查询额度消费记录失败: {e}", exc_info=True)
