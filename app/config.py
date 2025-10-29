@@ -100,10 +100,32 @@ class Settings(BaseSettings):
         description="JWT密钥（请在生产环境修改为随机强密钥）"
     )
     
+    # ===== 支付配置 =====
+    # 测试价格配置
+    MEMBER_PRICE_TEST: float = Field(default=0.10, description="会员测试价格(元)")
+    CREDITS_PRICE_TEST: float = Field(default=0.01, description="额度测试价格(元)")
+    CREDITS_AMOUNT_TEST: int = Field(default=1, description="测试额度数量")
+    
+    # 正式价格配置（待启用）
+    MEMBER_PRICE_PROD: float = Field(default=29.90, description="会员正式价格(元)")
+    CREDITS_PRICE_PROD: float = Field(default=9.90, description="额度正式价格(元)")
+    CREDITS_AMOUNT_PROD: int = Field(default=10, description="正式额度数量")
+    
+    # 价格模式切换
+    USE_TEST_PRICE: bool = Field(default=True, description="是否使用测试价格")
+    
     # ===== 微信配置 =====
     WECHAT_APPID: str = Field(default="", description="微信AppID")
     WECHAT_SECRET: str = Field(default="", description="微信AppSecret")
     WECHAT_TOKEN: str = Field(default="", description="微信Token（用于服务器验证）")
+    
+    # ===== 微信支付配置 =====
+    WECHAT_PAY_MCHID: str = Field(default="", description="微信支付商户号")
+    WECHAT_PAY_API_KEY: str = Field(default="", description="微信支付API密钥")
+    WECHAT_PAY_NOTIFY_URL: str = Field(
+        default="https://your-domain.com/api/v1/payment/notify",
+        description="微信支付回调URL"
+    )
     
     JWT_ALGORITHM: str = Field(default="HS256", description="JWT算法")
     JWT_ACCESS_TOKEN_EXPIRE_DAYS: int = Field(default=1, description="Token过期天数")

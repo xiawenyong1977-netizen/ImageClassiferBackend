@@ -13,6 +13,7 @@ import logging
 import aiomysql
 import xml.etree.ElementTree as ET
 import time
+import json
 
 from app.auth import authenticate_user, create_access_token, Token
 from app.config import settings
@@ -130,17 +131,18 @@ async def wechat_verify(
         raise HTTPException(status_code=403, detail="验证失败")
 
 
-@router.post("/wechat", summary="微信授权登录（已废弃）")
-async def wechat_auth(request: WeChatAuthRequest):
+@router.get("/wechat", summary="微信网页授权获取openid")
+async def wechat_auth(code: str):
     """
-    【已废弃】微信授权登录，获取openid
+    微信网页授权，通过code获取openid
     
-    这个接口已经不再使用，请使用扫码关注流程：
-    1. POST /api/v1/auth/wechat/qrcode - 生成二维码
-    2. GET /api/v1/auth/wechat/check-follow - 检查关注状态
+    这是网页授权流程的一部分，用户点击公众号菜单后：
+    1. 跳转到微信授权页面
+    2. 授权后返回code
+    3. 调用此接口换取openid
     """
     try:
-        logger.info(f"微信授权请求: code={request.code[:20]}...")
+        logger.info(f"微信网页授权请求: code={code[:20]}...")
         
         # 1. 调用微信API获取access_token
         token_response = requests.get(
@@ -148,7 +150,7 @@ async def wechat_auth(request: WeChatAuthRequest):
             params={
                 'appid': settings.WECHAT_APPID,
                 'secret': settings.WECHAT_SECRET,
-                'code': request.code,
+                'code': code,
                 'grant_type': 'authorization_code'
             },
             timeout=10
@@ -162,27 +164,7 @@ async def wechat_auth(request: WeChatAuthRequest):
         access_token = token_response['access_token']
         logger.info(f"获取openid成功: {openid[:16]}...")
         
-        # 2. 获取用户信息
-        user_info_response = requests.get(
-            "https://api.weixin.qq.com/sns/userinfo",
-            params={
-                'access_token': access_token,
-                'openid': openid,
-                'lang': 'zh_CN'
-            },
-            timeout=10
-        ).json()
-        
-        if 'errcode' in user_info_response:
-            logger.warning(f"获取用户信息失败: {user_info_response}")
-            # 如果获取用户信息失败，使用默认值
-            nickname = None
-            avatar_url = None
-        else:
-            nickname = user_info_response.get('nickname')
-            avatar_url = user_info_response.get('headimgurl')
-        
-        # 3. 创建或更新用户
+        # 2. 创建或更新用户（使用snsapi_base时，不需要获取用户详情信息）
         async with db.get_connection() as conn:
             async with conn.cursor() as cursor:
                 await cursor.execute(
@@ -191,34 +173,28 @@ async def wechat_auth(request: WeChatAuthRequest):
                 )
                 exists = await cursor.fetchone()
                 
-                if exists:
-                    # 更新用户信息
-                    await cursor.execute(
-                        """UPDATE wechat_users 
-                           SET nickname = %s, avatar_url = %s, last_active_time = NOW()
-                           WHERE openid = %s""",
-                        (nickname, avatar_url, openid)
-                    )
-                    logger.info(f"更新用户信息: openid={openid[:16]}...")
-                else:
-                    # 创建新用户（首次关注，给予100张额度）
+                if not exists:
+                    # 创建新用户（首次授权，给予10张额度）
                     await cursor.execute(
                         """INSERT INTO wechat_users 
-                           (openid, nickname, avatar_url, total_credits, remaining_credits, used_credits)
-                           VALUES (%s, %s, %s, 100, 100, 0)""",
-                        (openid, nickname, avatar_url)
+                           (openid, total_credits, remaining_credits, used_credits)
+                           VALUES (%s, 10, 10, 0)""",
+                        (openid,)
                     )
-                    logger.info(f"创建新用户: openid={openid[:16]}..., 额度=100")
+                    logger.info(f"创建新用户: openid={openid[:16]}..., 额度=10")
+                else:
+                    # 更新活跃时间
+                    await cursor.execute(
+                        """UPDATE wechat_users SET last_active_time = NOW() WHERE openid = %s""",
+                        (openid,)
+                    )
                 
                 await conn.commit()
         
-        return WeChatAuthResponse(
-            success=True,
-            openid=openid,
-            access_token=access_token,
-            nickname=nickname,
-            avatar_url=avatar_url
-        )
+        return {
+            "success": True,
+            "openid": openid
+        }
         
     except HTTPException:
         raise
@@ -681,3 +657,89 @@ async def check_follow(client_id: str):
         logger.error(f"检查关注状态异常: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="检查失败")
 
+
+# ===== 微信公众号菜单管理 =====
+
+@router.post("/wechat/create-menu", summary="创建微信公众号菜单")
+async def create_wechat_menu():
+    """
+    创建微信公众号菜单
+    包含：开通会员、购买额度、我的额度
+    """
+    try:
+        logger.info("开始创建微信公众号菜单...")
+        
+        # 获取access_token
+        token_response = requests.get(
+            "https://api.weixin.qq.com/cgi-bin/token",
+            params={
+                'grant_type': 'client_credential',
+                'appid': settings.WECHAT_APPID,
+                'secret': settings.WECHAT_SECRET
+            },
+            timeout=10
+        ).json()
+        
+        if 'errcode' in token_response:
+            logger.error(f"获取access_token失败: {token_response}")
+            raise HTTPException(status_code=400, detail="获取access_token失败")
+        
+        access_token = token_response['access_token']
+        
+        # 定义菜单结构（使用网页授权URL）
+        # 注意：微信网页授权需要跳转到授权页面获取code，然后回调到目标页面
+        from urllib.parse import quote
+        
+        auth_base_url = "https://open.weixin.qq.com/connect/oauth2/authorize"
+        appid = settings.WECHAT_APPID
+        
+        # 构建授权URL（redirect_uri需要URL编码）
+        member_url = f"{auth_base_url}?appid={appid}&redirect_uri={quote('https://www.xintuxiangce.top/member.html')}&response_type=code&scope=snsapi_base&state=member#wechat_redirect"
+        credits_url = f"{auth_base_url}?appid={appid}&redirect_uri={quote('https://www.xintuxiangce.top/credits.html')}&response_type=code&scope=snsapi_base&state=credits#wechat_redirect"
+        credits_info_url = f"{auth_base_url}?appid={appid}&redirect_uri={quote('https://www.xintuxiangce.top/credits_info.html')}&response_type=code&scope=snsapi_base&state=credits_info#wechat_redirect"
+        
+        menu_data = {
+            "button": [
+                {
+                    "type": "view",
+                    "name": "开通会员",
+                    "url": member_url
+                },
+                {
+                    "type": "view",
+                    "name": "购买额度",
+                    "url": credits_url
+                },
+                {
+                    "type": "view",
+                    "name": "我的额度",
+                    "url": credits_info_url
+                }
+            ]
+        }
+        
+        # 调用微信菜单创建接口（使用data参数确保UTF-8编码）
+        menu_json = json.dumps(menu_data, ensure_ascii=False).encode('utf-8')
+        
+        create_response = requests.post(
+            f"https://api.weixin.qq.com/cgi-bin/menu/create?access_token={access_token}",
+            data=menu_json,
+            headers={'Content-Type': 'application/json'},
+            timeout=10
+        ).json()
+        
+        if create_response.get('errcode') == 0:
+            logger.info("公众号菜单创建成功")
+            return {
+                "success": True,
+                "message": "菜单创建成功"
+            }
+        else:
+            logger.error(f"菜单创建失败: {create_response}")
+            raise HTTPException(status_code=400, detail=f"菜单创建失败: {create_response.get('errmsg', '未知错误')}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建菜单异常: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="创建菜单失败")

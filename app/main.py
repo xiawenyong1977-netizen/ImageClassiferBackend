@@ -13,7 +13,7 @@ import os
 
 from app.config import settings
 from app.database import db
-from app.api import classify, stats, health, location, auth, local_classify, config, release, image_edit, user
+from app.api import classify, stats, health, location, auth, local_classify, config, release, image_edit, user, payment
 from app.api.auth import wechat_message_handler, wechat_verify
 
 
@@ -88,6 +88,7 @@ app.include_router(stats.router)
 app.include_router(health.router)
 app.include_router(location.router)
 app.include_router(image_edit.router)  # 图像编辑
+app.include_router(payment.router)  # 支付功能
 
 # 微信公众号服务器配置验证接口（GET请求）
 @app.get("/api/v1/auth/wechat/verify", summary="微信服务器配置验证")
@@ -124,6 +125,22 @@ if os.path.exists(web_path):
             "docs": "/docs",
             "health": "/api/v1/health"
         }
+    
+    # 支付相关页面的独立路由
+    @app.get("/member.html")
+    async def member_page():
+        """会员开通页面"""
+        return FileResponse(os.path.join(web_path, "member.html"))
+    
+    @app.get("/credits.html")
+    async def credits_page():
+        """购买额度页面"""
+        return FileResponse(os.path.join(web_path, "credits.html"))
+    
+    @app.get("/credits_info.html")
+    async def credits_info_page():
+        """我的额度页面"""
+        return FileResponse(os.path.join(web_path, "credits_info.html"))
 else:
     # 如果web目录不存在，返回JSON
     @app.get("/", tags=["root"])

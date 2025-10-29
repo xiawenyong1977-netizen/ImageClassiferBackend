@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的额度 - 芯图相册</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .stats-card {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .stats-card h2 {
+            color: #333;
+            font-size: 24px;
+            margin-bottom: 20px;
+        }
+
+        .credits-display {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 30px;
+        }
+
+        .credit-item {
+            flex: 1;
+        }
+
+        .credit-value {
+            font-size: 48px;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .credit-label {
+            font-size: 14px;
+            color: #666;
+        }
+
+        .member-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+
+        .actions {
+            display: flex;
+            gap: 15px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 15px;
+            font-size: 16px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+
+        .btn-secondary {
+            background: white;
+            color: #667eea;
+            border: 2px solid #667eea;
+        }
+
+        .btn-secondary:hover {
+            background: #f0f0f0;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fef2f2;
+            color: #c33;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .debug-info {
+            background: #f0f0f0;
+            color: #333;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            display: none;
+        }
+
+        .debug-info.show {
+            display: block;
+        }
+
+        .debug-toggle {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 8px 15px;
+            border-radius: 5px;
+            font-size: 12px;
+            z-index: 9999;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="debug-toggle" onclick="toggleDebug()">调试信息</div>
+    <div class="container">
+        <div class="header">
+            <h1 id="pageTitle">我的额度</h1>
+        </div>
+
+        <div class="stats-card" id="statsCard">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>加载中...</p>
+            </div>
+        </div>
+
+        <div class="actions" id="actionButtons">
+            <!-- 按钮内容由JavaScript动态生成 -->
+        </div>
+
+        <div class="debug-info" id="debugInfo">
+            <div><strong>调试信息：</strong></div>
+            <div id="debugInfoContent"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'https://www.xintuxiangce.top/api/v1';
+        let openid = null;
+
+        // 调试信息显示
+        const debugLogs = [];
+        function addDebugLog(message) {
+            const time = new Date().toLocaleTimeString();
+            debugLogs.push(`${time} - ${message}`);
+            console.log(`[DEBUG ${time}] ${message}`);
+        }
+
+        function toggleDebug() {
+            const debugInfo = document.getElementById('debugInfo');
+            const content = document.getElementById('debugInfoContent');
+            content.innerHTML = debugLogs.join('<br>');
+            debugInfo.classList.toggle('show');
+        }
+
+        // 检查URL参数：优先使用openid参数，其次使用code参数
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlOpenId = urlParams.get('openid');
+        const code = urlParams.get('code');
+        
+        addDebugLog('当前URL: ' + window.location.href);
+        addDebugLog('openid参数: ' + (urlOpenId || '无'));
+        addDebugLog('code参数: ' + (code || '无'));
+        
+        if (urlOpenId) {
+            // 直接从参数获取openid（从member页面跳转过来）
+            openid = urlOpenId;
+            addDebugLog('从参数获取openid: ' + openid.substring(0, 16) + '...');
+            // 清除URL中的openid参数
+            window.history.replaceState({}, document.title, window.location.pathname);
+            // 加载额度信息
+            loadCredits();
+        } else if (code) {
+            // 通过code获取openid
+            addDebugLog('开始通过code获取openid...');
+            document.getElementById('statsCard').innerHTML = `
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>正在获取用户信息...</p>
+                </div>
+            `;
+            
+            fetch(`${API_BASE_URL}/auth/wechat?code=${code}`)
+                .then(res => {
+                    addDebugLog('授权接口响应状态: ' + res.status);
+                    return res.json();
+                })
+                .then(data => {
+                    addDebugLog('授权响应: ' + JSON.stringify(data));
+                    if (data.success && data.openid) {
+                        openid = data.openid;
+                        addDebugLog('成功获取openid: ' + openid.substring(0, 16) + '...');
+                        // 清除URL中的code参数
+                        window.history.replaceState({}, document.title, window.location.pathname);
+                        // 加载额度信息
+                        loadCredits();
+                    } else {
+                        addDebugLog('授权失败: ' + JSON.stringify(data));
+                        document.getElementById('statsCard').innerHTML = `
+                            <div class="error">
+                                <p>获取用户信息失败：${data.detail || '未知错误'}</p>
+                            </div>
+                        `;
+                    }
+                })
+                .catch(err => {
+                    addDebugLog('获取openid异常: ' + err.message);
+                    document.getElementById('statsCard').innerHTML = `
+                        <div class="error">
+                            <p>网络错误：${err.message}</p>
+                        </div>
+                    `;
+                });
+        } else {
+            // 既没有openid参数也没有code参数
+            addDebugLog('缺少openid或code参数');
+            document.getElementById('statsCard').innerHTML = `
+                <div class="error">
+                    <p>未获取到授权信息，请通过公众号菜单重新进入</p>
+                </div>
+            `;
+        }
+
+        // 加载额度信息
+        async function loadCredits() {
+            if (!openid) {
+                addDebugLog('没有openid，无法加载额度');
+                return;
+            }
+
+            const statsCard = document.getElementById('statsCard');
+            addDebugLog('开始加载额度信息，openid: ' + openid.substring(0, 16) + '...');
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/user/credits`, {
+                    headers: {
+                        'X-WeChat-OpenID': openid
+                    }
+                });
+                
+                addDebugLog('获取额度响应状态: ' + response.status);
+
+                const result = await response.json();
+                addDebugLog('获取额度响应: ' + JSON.stringify(result));
+
+                if (result.success) {
+                    const data = result.data || result;
+                    const isMember = data.is_member || false;
+                    const memberExpireAt = data.member_expire_at || null;
+
+                    // 更新按钮区域
+                    const actionButtons = document.getElementById('actionButtons');
+                    if (isMember && memberExpireAt) {
+                        // 会员用户：只显示购买额度按钮
+                        actionButtons.innerHTML = `
+                            <button class="btn btn-primary" style="width: 100%;" onclick="window.location.href='credits.html?openid=' + '${openid}'">购买额度</button>
+                        `;
+                        // 会员显示额度信息
+                        const expireDate = new Date(memberExpireAt).toLocaleDateString('zh-CN');
+                        statsCard.innerHTML = `
+                            <div class="member-badge">会员至 ${expireDate}</div>
+                            <h2>我的额度</h2>
+                            <div class="credits-display">
+                                <div class="credit-item">
+                                    <div class="credit-value">${data.remaining_credits || 0}</div>
+                                    <div class="credit-label">剩余额度</div>
+                                </div>
+                                <div class="credit-item">
+                                    <div class="credit-value">${data.used_credits || 0}</div>
+                                    <div class="credit-label">已用额度</div>
+                                </div>
+                                <div class="credit-item">
+                                    <div class="credit-value">${data.total_credits || 0}</div>
+                                    <div class="credit-label">总额度</div>
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        // 非会员用户：显示提示信息
+                        statsCard.innerHTML = `
+                            <div class="error" style="background: #fff3cd; color: #856404; border: 1px solid #ffeaa7;">
+                                <p style="font-size: 16px; margin-bottom: 10px;">您还不是会员</p>
+                                <p style="font-size: 14px; opacity: 0.8;">请先开通会员以享受更多权益</p>
+                            </div>
+                        `;
+                        // 显示两个按钮
+                        actionButtons.innerHTML = `
+                            <button class="btn btn-primary" onclick="window.location.href='member.html?openid=' + '${openid}'">开通会员</button>
+                            <button class="btn btn-secondary" onclick="window.location.href='credits.html?openid=' + '${openid}'">购买额度</button>
+                        `;
+                    }
+                    addDebugLog('额度信息加载成功');
+                } else {
+                    addDebugLog('获取额度失败: ' + JSON.stringify(result));
+                    statsCard.innerHTML = `
+                        <div class="error">
+                            <p>获取额度信息失败：${result.detail || '未知错误'}</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                addDebugLog('加载额度异常: ' + error.message);
+                statsCard.innerHTML = `
+                    <div class="error">
+                        <p>网络错误：${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+    </script>
+</body>
+</html>
