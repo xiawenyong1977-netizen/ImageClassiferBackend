@@ -576,13 +576,13 @@ async def wechat_message_handler(request: Request):
                     scene_id = None
             
             if scene_id:
-                # 更新 scene_id -> openid 映射
+                # 更新 scene_id -> openid 映射（仅在状态为pending时更新）
                 async with db.get_connection() as conn:
                     async with conn.cursor() as cursor:
                         await cursor.execute(
                             """UPDATE wechat_qrcode_bindings 
                                SET openid = %s, status = 'completed', completed_at = NOW()
-                               WHERE scene_id = %s""",
+                               WHERE scene_id = %s AND status = 'pending'""",
                             (from_user, scene_id)
                         )
                         await conn.commit()
@@ -611,46 +611,34 @@ async def check_follow(client_id: str):
     
     返回：
     - subscribed: True表示已关注，False表示未关注
-    - openid: 如果已关注，返回openid
+    - completed_at: 如果已关注，返回关注完成时间
     """
     try:
         client_id = client_id.strip()  # 去除前后空格
-        logger.info(f"检查关注状态: client_id='{client_id}' (length={len(client_id)})")
+        logger.info(f"检查关注状态: client_id='{client_id}'")
         
         # 查询client_id -> openid映射
         async with db.get_connection() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cursor:
-                # 先查询数据库中有哪些client_id
-                await cursor.execute("SELECT client_id, status FROM wechat_qrcode_bindings")
-                all_bindings = await cursor.fetchall()
-                logger.info(f"数据库中的所有绑定: {[b['client_id'] for b in all_bindings]}")
-                
                 # 查询特定client_id（必须status=completed才有openid）
                 await cursor.execute(
-                    """SELECT b.openid, b.status, b.completed_at
-                       FROM wechat_qrcode_bindings b
-                       WHERE b.client_id = %s AND b.status = 'completed'""",
+                    """SELECT openid, status, completed_at
+                       FROM wechat_qrcode_bindings
+                       WHERE client_id = %s AND status = 'completed'""",
                     (client_id,)
                 )
                 binding = await cursor.fetchone()
                 
-                logger.info(f"查询结果: binding={binding}, type={type(binding)}")
-                if binding:
-                    logger.info(f"binding['openid']={binding.get('openid')}, type={type(binding.get('openid'))}")
-                    logger.info(f"bool binding={bool(binding)}, bool openid={bool(binding.get('openid'))}")
-                
                 if binding and binding['openid']:
-                    logger.info(f"用户已关注: client_id={client_id}, openid={binding['openid'][:16]}...")
+                    logger.info(f"用户已关注: client_id={client_id}")
                     return {
                         "subscribed": True,
-                        "openid": binding['openid'],
                         "completed_at": str(binding['completed_at'])
                     }
                 else:
                     logger.info(f"用户未关注: client_id={client_id}")
                     return {
-                        "subscribed": False,
-                        "openid": None
+                        "subscribed": False
                     }
                     
     except Exception as e:

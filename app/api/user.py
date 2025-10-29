@@ -13,13 +13,49 @@ router = APIRouter(prefix="/api/v1/user", tags=["用户"])
 
 
 @router.get("/credits", summary="查询用户额度")
-async def get_user_credits(x_wechat_openid: str = Header(..., description="微信openid")):
+async def get_user_credits(
+    client_id: str = None,
+    x_wechat_openid: str = Header(None, description="微信openid")
+):
     """
     查询用户的图像编辑额度和会员状态
+    
+    支持两种调用方式：
+    1. 通过client_id查询（客户端扫码场景）
+    2. 通过openid查询（网页授权场景）
     
     返回用户的总额度、已使用额度、剩余额度和会员状态
     """
     try:
+        openid = None
+        
+        # 方式1：使用openid（网页授权）
+        if x_wechat_openid:
+            openid = x_wechat_openid
+            logger.info(f"查询用户额度: openid={openid[:16]}...")
+        
+        # 方式2：使用client_id（扫码关注）
+        elif client_id:
+            client_id = client_id.strip()
+            logger.info(f"查询用户额度: client_id={client_id}")
+            
+            async with db.get_connection() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    await cursor.execute(
+                        """SELECT openid, status FROM wechat_qrcode_bindings 
+                           WHERE client_id = %s AND status = 'completed'""",
+                        (client_id,)
+                    )
+                    binding = await cursor.fetchone()
+                    
+                    if not binding or not binding['openid']:
+                        raise HTTPException(status_code=404, detail="用户未关注公众号")
+                    
+                    openid = binding['openid']
+        else:
+            raise HTTPException(status_code=400, detail="缺少client_id或openid参数")
+        
+        # 查询用户额度信息
         async with db.get_connection() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cursor:
                 await cursor.execute(
@@ -27,7 +63,7 @@ async def get_user_credits(x_wechat_openid: str = Header(..., description="微�
                               is_member, member_expire_at, created_at, last_active_time
                        FROM wechat_users 
                        WHERE openid = %s""",
-                    (x_wechat_openid,)
+                    (openid,)
                 )
                 user = await cursor.fetchone()
                 
@@ -36,7 +72,11 @@ async def get_user_credits(x_wechat_openid: str = Header(..., description="微�
                 
                 return {
                     "success": True,
-                    "data": user
+                    "total_credits": user['total_credits'],
+                    "used_credits": user['used_credits'],
+                    "remaining_credits": user['remaining_credits'],
+                    "is_member": bool(user['is_member']),
+                    "member_expire_at": str(user['member_expire_at']) if user['member_expire_at'] else None
                 }
                 
     except HTTPException:
@@ -47,20 +87,56 @@ async def get_user_credits(x_wechat_openid: str = Header(..., description="微�
 
 
 @router.get("/member-status", summary="查询会员状态")
-async def get_member_status(x_wechat_openid: str = Header(..., description="微信openid")):
+async def get_member_status(
+    client_id: str = None,
+    x_wechat_openid: str = Header(None, description="微信openid")
+):
     """
     查询用户的会员状态
+    
+    支持两种调用方式：
+    1. 通过client_id查询（客户端扫码场景）
+    2. 通过openid查询（网页授权场景）
     
     返回用户是否是会员、会员到期时间等信息
     """
     try:
+        openid = None
+        
+        # 方式1：使用openid（网页授权）
+        if x_wechat_openid:
+            openid = x_wechat_openid
+            logger.info(f"查询会员状态: openid={openid[:16]}...")
+        
+        # 方式2：使用client_id（扫码关注）
+        elif client_id:
+            client_id = client_id.strip()
+            logger.info(f"查询会员状态: client_id={client_id}")
+            
+            async with db.get_connection() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    await cursor.execute(
+                        """SELECT openid, status FROM wechat_qrcode_bindings 
+                           WHERE client_id = %s AND status = 'completed'""",
+                        (client_id,)
+                    )
+                    binding = await cursor.fetchone()
+                    
+                    if not binding or not binding['openid']:
+                        raise HTTPException(status_code=404, detail="用户未关注公众号")
+                    
+                    openid = binding['openid']
+        else:
+            raise HTTPException(status_code=400, detail="缺少client_id或openid参数")
+        
+        # 查询会员状态
         async with db.get_connection() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cursor:
                 await cursor.execute(
                     """SELECT is_member, member_expire_at, created_at 
                        FROM wechat_users 
                        WHERE openid = %s""",
-                    (x_wechat_openid,)
+                    (openid,)
                 )
                 user = await cursor.fetchone()
                 
@@ -70,8 +146,7 @@ async def get_member_status(x_wechat_openid: str = Header(..., description="微�
                 return {
                     "success": True,
                     "is_member": bool(user['is_member']),
-                    "member_expire_at": str(user['member_expire_at']) if user['member_expire_at'] else None,
-                    "data": user
+                    "member_expire_at": str(user['member_expire_at']) if user['member_expire_at'] else None
                 }
                 
     except HTTPException:
