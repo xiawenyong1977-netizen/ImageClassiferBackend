@@ -275,10 +275,15 @@
             }
 
             try {
-                const response = await fetch(`${API_BASE_URL}/user/credits`, {
+                // 添加时间戳防止缓存
+                const timestamp = new Date().getTime();
+                const response = await fetch(`${API_BASE_URL}/user/credits?t=${timestamp}`, {
                     headers: {
-                        'X-WeChat-OpenID': openid
-                    }
+                        'X-WeChat-OpenID': openid,
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache'
+                    },
+                    cache: 'no-store'
                 });
 
                 const result = await response.json();

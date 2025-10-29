@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>购买额度 - 芯图相册</title>
     <style>
         * {
@@ -292,7 +295,15 @@
             // 通过code获取openid（从公众号菜单进入）
             addDebugLog('开始通过code获取openid...');
             
-            fetch(`${API_BASE_URL}/auth/wechat?code=${code}`)
+            // 添加时间戳防止缓存
+            const authTimestamp = new Date().getTime();
+            fetch(`${API_BASE_URL}/auth/wechat?code=${code}&t=${authTimestamp}`, {
+                headers: {
+                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                    'Pragma': 'no-cache'
+                },
+                cache: 'no-store'
+            })
                 .then(res => {
                     addDebugLog('授权接口响应状态: ' + res.status);
                     return res.json();
@@ -379,12 +390,17 @@
             error.classList.remove('show');
 
             try {
-                const response = await fetch(`${API_BASE_URL}/payment/create-order`, {
+                // 添加时间戳防止缓存
+                const timestamp = new Date().getTime();
+                const response = await fetch(`${API_BASE_URL}/payment/create-order?t=${timestamp}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-WeChat-OpenID': openid
+                        'X-WeChat-OpenID': openid,
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache'
                     },
+                    cache: 'no-store',
                     body: JSON.stringify(requestData)
                 });
 
