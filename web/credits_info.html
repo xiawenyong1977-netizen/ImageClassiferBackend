@@ -171,6 +171,67 @@
             z-index: 9999;
             cursor: pointer;
         }
+
+        .history-card {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+
+        .actions {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+            margin-bottom: 30px;
+        }
+
+        .history-card h3 {
+            color: #333;
+            font-size: 20px;
+            margin-bottom: 20px;
+        }
+
+        .history-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .history-item:last-child {
+            border-bottom: none;
+        }
+
+        .history-info {
+            flex: 1;
+        }
+
+        .history-info .time {
+            font-size: 13px;
+            color: #999;
+            margin-bottom: 5px;
+        }
+
+        .history-info .details {
+            font-size: 14px;
+            color: #333;
+        }
+
+        .history-amount {
+            font-size: 18px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .no-history {
+            text-align: center;
+            padding: 30px;
+            color: #999;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
@@ -189,6 +250,14 @@
 
         <div class="actions" id="actionButtons">
             <!-- 按钮内容由JavaScript动态生成 -->
+        </div>
+
+        <div class="history-card" id="historyCard">
+            <h3>消费记录</h3>
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>加载中...</p>
+            </div>
         </div>
 
         <div class="debug-info" id="debugInfo">
@@ -308,51 +377,36 @@
 
                 if (result.success) {
                     const data = result.data || result;
-                    const isMember = data.is_member || false;
-                    const memberExpireAt = data.member_expire_at || null;
 
-                    // 更新按钮区域
+                    // 显示额度信息
+                    statsCard.innerHTML = `
+                        <h2>我的额度</h2>
+                        <div class="credits-display">
+                            <div class="credit-item">
+                                <div class="credit-value">${data.remaining_credits || 0}</div>
+                                <div class="credit-label">剩余额度</div>
+                            </div>
+                            <div class="credit-item">
+                                <div class="credit-value">${data.used_credits || 0}</div>
+                                <div class="credit-label">已用额度</div>
+                            </div>
+                            <div class="credit-item">
+                                <div class="credit-value">${data.total_credits || 0}</div>
+                                <div class="credit-label">总额度</div>
+                            </div>
+                        </div>
+                    `;
+                    
+                    // 统一显示购买额度按钮
                     const actionButtons = document.getElementById('actionButtons');
-                    if (isMember && memberExpireAt) {
-                        // 会员用户：只显示购买额度按钮
-                        actionButtons.innerHTML = `
-                            <button class="btn btn-primary" style="width: 100%;" onclick="window.location.href='credits.html?openid=' + '${openid}'">购买额度</button>
-                        `;
-                        // 会员显示额度信息
-                        const expireDate = new Date(memberExpireAt).toLocaleDateString('zh-CN');
-                        statsCard.innerHTML = `
-                            <div class="member-badge">会员至 ${expireDate}</div>
-                            <h2>我的额度</h2>
-                            <div class="credits-display">
-                                <div class="credit-item">
-                                    <div class="credit-value">${data.remaining_credits || 0}</div>
-                                    <div class="credit-label">剩余额度</div>
-                                </div>
-                                <div class="credit-item">
-                                    <div class="credit-value">${data.used_credits || 0}</div>
-                                    <div class="credit-label">已用额度</div>
-                                </div>
-                                <div class="credit-item">
-                                    <div class="credit-value">${data.total_credits || 0}</div>
-                                    <div class="credit-label">总额度</div>
-                                </div>
-                            </div>
-                        `;
-                    } else {
-                        // 非会员用户：显示提示信息
-                        statsCard.innerHTML = `
-                            <div class="error" style="background: #fff3cd; color: #856404; border: 1px solid #ffeaa7;">
-                                <p style="font-size: 16px; margin-bottom: 10px;">您还不是会员</p>
-                                <p style="font-size: 14px; opacity: 0.8;">请先开通会员以享受更多权益</p>
-                            </div>
-                        `;
-                        // 显示两个按钮
-                        actionButtons.innerHTML = `
-                            <button class="btn btn-primary" onclick="window.location.href='member.html?openid=' + '${openid}'">开通会员</button>
-                            <button class="btn btn-secondary" onclick="window.location.href='credits.html?openid=' + '${openid}'">购买额度</button>
-                        `;
-                    }
+                    actionButtons.innerHTML = `
+                        <button class="btn btn-primary" style="width: 100%;" onclick="window.location.href='credits.html?openid=' + '${openid}'">购买额度</button>
+                    `;
+                    
                     addDebugLog('额度信息加载成功');
+                    
+                    // 显示消费记录
+                    loadCreditsUsage();
                 } else {
                     addDebugLog('获取额度失败: ' + JSON.stringify(result));
                     statsCard.innerHTML = `
@@ -367,6 +421,59 @@
                     <div class="error">
                         <p>网络错误：${error.message}</p>
                     </div>
+                `;
+            }
+        }
+
+        // 加载消费记录
+        async function loadCreditsUsage() {
+            if (!openid) {
+                return;
+            }
+
+            const historyCard = document.getElementById('historyCard');
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/user/credits-usage`, {
+                    headers: {
+                        'X-WeChat-OpenID': openid
+                    }
+                });
+                
+                const result = await response.json();
+                addDebugLog('获取消费记录响应: ' + JSON.stringify(result));
+
+                if (result.success && result.data && result.data.length > 0) {
+                    const records = result.data;
+                    let html = '<h3>消费记录</h3>';
+                    
+                    records.forEach(record => {
+                        const time = new Date(record.created_at).toLocaleString('zh-CN');
+                        const details = `请求${record.request_image_count}张，成功${record.success_image_count}张`;
+                        
+                        html += `
+                            <div class="history-item">
+                                <div class="history-info">
+                                    <div class="time">${time}</div>
+                                    <div class="details">${details}</div>
+                                </div>
+                                <div class="history-amount">-${record.credits_used}</div>
+                            </div>
+                        `;
+                    });
+                    
+                    historyCard.innerHTML = html;
+                } else {
+                    historyCard.innerHTML = `
+                        <h3>消费记录</h3>
+                        <div class="no-history">暂无消费记录</div>
+                    `;
+                }
+            } catch (error) {
+                addDebugLog('加载消费记录异常: ' + error.message);
+                historyCard.innerHTML = `
+                    <h3>消费记录</h3>
+                    <div class="no-history">加载失败</div>
                 `;
             }
         }

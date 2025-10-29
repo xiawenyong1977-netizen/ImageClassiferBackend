@@ -79,3 +79,51 @@ async def get_member_status(x_wechat_openid: str = Header(..., description="微�
     except Exception as e:
         logger.error(f"查询会员状态失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="查询失败")
+
+
+@router.get("/credits-usage", summary="查询额度消费记录")
+async def get_credits_usage(
+    x_wechat_openid: str = Header(..., description="微信openid"),
+    limit: int = 20
+):
+    """
+    查询用户的额度消费记录
+    
+    返回最近的额度消费历史记录
+    """
+    try:
+        async with db.get_connection() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                await cursor.execute(
+                    """SELECT id, task_id, task_type, credits_used, 
+                              request_image_count, success_image_count, created_at
+                       FROM credits_usage 
+                       WHERE openid = %s
+                       ORDER BY created_at DESC
+                       LIMIT %s""",
+                    (x_wechat_openid, limit)
+                )
+                records = await cursor.fetchall()
+                
+                # 转换为可序列化的格式
+                result = []
+                for record in records:
+                    result.append({
+                        "id": record['id'],
+                        "task_id": record['task_id'],
+                        "task_type": record['task_type'],
+                        "credits_used": record['credits_used'],
+                        "request_image_count": record.get('request_image_count', record['credits_used']),
+                        "success_image_count": record.get('success_image_count', record['credits_used']),
+                        "created_at": str(record['created_at']) if record['created_at'] else None
+                    })
+                
+                return {
+                    "success": True,
+                    "data": result,
+                    "count": len(result)
+                }
+                
+    except Exception as e:
+        logger.error(f"查询额度消费记录失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="查询失败")

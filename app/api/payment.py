@@ -283,17 +283,20 @@ async def payment_notify(request: Request):
                 
                 # 处理会员开通
                 if order_type == 'member':
-                    # 更新会员状态（有效期30天）
+                    # 更新会员状态（有效期30天），并赠送10个免费额度
                     expire_at = datetime.now() + timedelta(days=30)
+                    free_credits = 10  # 会员赠送额度
                     await cursor.execute(
                         """UPDATE wechat_users 
                            SET is_member = 1, 
                                member_expire_at = %s,
+                               remaining_credits = remaining_credits + %s,
+                               total_credits = total_credits + %s,
                                total_paid_amount = total_paid_amount + %s
                            WHERE openid = %s""",
-                        (expire_at, total_fee, openid)
+                        (expire_at, free_credits, free_credits, total_fee, openid)
                     )
-                    logger.info(f"会员开通成功: openid={openid[:16]}..., expire_at={expire_at}")
+                    logger.info(f"会员开通成功: openid={openid[:16]}..., expire_at={expire_at}, 赠送额度={free_credits}")
                 
                 # 处理额度购买
                 elif order_type == 'credits':

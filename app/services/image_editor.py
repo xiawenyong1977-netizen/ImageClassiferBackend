@@ -16,6 +16,7 @@ import aiomysql
 from app.database import db
 from app.config import settings
 from app.utils.hash_utils import calculate_hash
+from app.services.credit_service import credit_service
 
 
 class ImageEditService:
@@ -41,21 +42,10 @@ class ImageEditService:
         
         # 检查用户额度（如果传入了openid）
         if openid:
-            async with db.get_connection() as conn:
-                async with conn.cursor(aiomysql.DictCursor) as cursor:
-                    await cursor.execute(
-                        """SELECT remaining_credits FROM wechat_users WHERE openid = %s""",
-                        (openid,)
-                    )
-                    user = await cursor.fetchone()
-                    
-                    if not user:
-                        raise ValueError("用户不存在")
-                    
-                    if user['remaining_credits'] < total_images:
-                        raise ValueError(
-                            f"额度不足：剩余{user['remaining_credits']}张，需要{total_images}张"
-                        )
+            # 使用 credit_service 检查额度（会员和非会员都检查，会员有无限额度）
+            has_credit, error_msg = await credit_service.check_and_deduct_credit(openid, deduct_on_success=False)
+            if not has_credit:
+                raise ValueError(error_msg)
         
         # 保存任务到数据库
         async with db.get_connection() as conn:
@@ -309,28 +299,31 @@ class ImageEditService:
                 
                 # 如果传入了openid，扣除用户额度
                 if openid:
-                    # 统计成功的图片数量
+                    # 统计请求的图片总数量
+                    total_images = len(results)
+                    # 统计成功的图片数量（不区分缓存还是API调用，只要成功返回就扣减）
                     success_count = len([r for r in results if r.get('status') == 'completed'])
                     
+                    # 统计缓存命中的数量（用于日志）
+                    cache_count = len([r for r in results if r.get('status') == 'completed' and r.get('from_cache', False)])
+                    api_count = success_count - cache_count
+                    
                     if success_count > 0:
-                        # 扣除额度
-                        await cursor.execute(
-                            """UPDATE wechat_users 
-                               SET used_credits = used_credits + %s,
-                                   remaining_credits = remaining_credits - %s
-                               WHERE openid = %s""",
-                            (success_count, success_count, openid)
-                        )
+                        # 使用 credit_service 扣减额度（会员和非会员都扣减）
+                        for _ in range(success_count):
+                            success, msg = await credit_service.check_and_deduct_credit(openid, deduct_on_success=True)
+                            if not success:
+                                logger.warning(f"扣减额度失败: {msg}")
                         
-                        # 记录额度消耗
+                        # 记录额度消耗（包含详细信息）
                         await cursor.execute(
                             """INSERT INTO credits_usage 
-                               (openid, task_id, task_type, credits_used)
-                               VALUES (%s, %s, 'image_edit', %s)""",
-                            (openid, task_id, success_count)
+                               (openid, task_id, task_type, credits_used, request_image_count, success_image_count)
+                               VALUES (%s, %s, 'image_edit', %s, %s, %s)""",
+                            (openid, task_id, success_count, total_images, success_count)
                         )
                         
-                        logger.info(f"已扣除额度: openid={openid[:16]}..., 扣除={success_count}张")
+                        logger.info(f"已扣除额度: openid={openid[:16]}..., 总扣除={success_count}张(请求={total_images}张, 缓存={cache_count}, API={api_count})")
                 
                 await conn.commit()
     
