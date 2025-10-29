@@ -115,6 +115,7 @@ class ImageEditService:
                 'filename': image_data['filename'],
                 'status': 'completed',
                 'result_url': result_url,
+                'enhanced_uri': result_url,
                 'from_cache': from_cache
             }
         except Exception as e:
@@ -258,7 +259,7 @@ class ImageEditService:
             with open(filepath, 'wb') as f:
                 f.write(image_data)
             
-            public_url = f"http://123.57.68.4:8000/images/edited/{filename}"
+            public_url = f"https://www.xintuxiangce.top/images/edited/{filename}"
             logger.info(f"图片已保存: {filepath}, 公共URL: {public_url}")
             return public_url
             
@@ -284,6 +285,16 @@ class ImageEditService:
                 await cursor.execute(
                     "UPDATE image_edit_tasks SET completed_images = %s, progress = %s WHERE task_id = %s",
                     (completed, progress, task_id)
+                )
+                await conn.commit()
+    
+    async def _update_results_incremental(self, task_id: str, results: List[Dict]):
+        """增量更新任务结果（实时保存已完成的图片）"""
+        async with db.get_connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
+                    "UPDATE image_edit_tasks SET results = %s WHERE task_id = %s",
+                    (json.dumps(results), task_id)
                 )
                 await conn.commit()
     
@@ -351,6 +362,247 @@ class ImageEditService:
         except Exception as e:
             logger.error(f"查询任务状态失败: {task_id}, 错误: {e}")
             return None
+    
+    async def submit_task_async(
+        self,
+        images: List[Dict],
+        edit_type: str,
+        edit_params: Dict,
+        user_id: Optional[str] = None,
+        openid: Optional[str] = None
+    ) -> str:
+        """提交编辑任务（异步处理，立即返回task_id）"""
+        
+        # 生成任务ID
+        from app.utils.id_generator import IDGenerator
+        task_id = IDGenerator.generate_request_id("task")
+        total_images = len(images)
+        
+        # 保存任务到数据库（兼容未添加openid列的表结构）
+        async with db.get_connection() as conn:
+            async with conn.cursor() as cursor:
+                await cursor.execute(
+                    """INSERT INTO image_edit_tasks 
+                       (task_id, user_id, edit_type, edit_params, total_images, status) 
+                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                    (task_id, user_id, edit_type, 
+                     json.dumps(edit_params), total_images, 'pending')
+                )
+                await conn.commit()
+        
+        logger.info(f"任务已创建: {task_id}, 图片数: {total_images}")
+        
+        # 异步处理任务（不阻塞）
+        asyncio.create_task(self._process_task_async(task_id, images, edit_type, edit_params, openid))
+        
+        return task_id
+    
+    async def _process_task_async(
+        self,
+        task_id: str,
+        images: List[Dict],
+        edit_type: str,
+        edit_params: Dict,
+        openid: Optional[str] = None
+    ):
+        """异步处理任务（优化版：先批量检查缓存，缓存命中立即返回）"""
+        try:
+            await self._update_status(task_id, 'processing')
+            
+            # 1. 先批量检查所有图片的缓存
+            logger.info(f"批量检查 {len(images)} 张图片的缓存...")
+            cache_results = await self._batch_check_cache(images, edit_type)
+            
+            # 2. 初始化结果数组（按原始顺序）
+            all_results = [None] * len(images)
+            cache_hit_count = 0
+            
+            for index, cache_result in enumerate(cache_results):
+                if cache_result:
+                    # 缓存命中，立即填充结果
+                    all_results[index] = cache_result
+                    cache_hit_count += 1
+                    logger.info(f"图片 {index + 1}/{len(images)} 缓存命中")
+            
+            # 3. 如果有缓存命中的，立即更新结果（让客户端快速看到）
+            if cache_hit_count > 0:
+                # 填充缓存未命中的位置为pending状态
+                for i in range(len(images)):
+                    if all_results[i] is None:
+                        all_results[i] = {
+                            'index': i,
+                            'filename': images[i].get('filename', ''),
+                            'status': 'processing',
+                            'result_url': None,
+                            'enhanced_uri': None
+                        }
+                await self._update_results_incremental(task_id, all_results)
+                logger.info(f"缓存命中 {cache_hit_count}/{len(images)} 张，已实时更新结果")
+            
+            # 4. 处理缓存未命中的图片（串行调用API）
+            api_count = 0
+            for index, image_data in enumerate(images):
+                if all_results[index] and all_results[index].get('status') == 'completed':
+                    # 已缓存命中，跳过
+                    continue
+                
+                logger.info(f"处理第 {index + 1}/{len(images)} 张图片（API调用）")
+                api_count += 1
+                
+                # 调用API处理
+                result = await self._edit_single_image_api_call(
+                    index, image_data, edit_type, edit_params
+                )
+                
+                all_results[index] = result
+                
+                # 实时保存已完成的图片结果
+                await self._update_results_incremental(task_id, all_results)
+                
+                # 更新进度
+                completed = sum(1 for r in all_results if r and r.get('status') == 'completed')
+                await self._update_progress(task_id, completed, len(images))
+            
+            logger.info(f"处理完成: 缓存命中={cache_hit_count}张, API调用={api_count}张")
+            
+            # 5. 最终保存结果并扣除额度
+            await self._save_results(task_id, all_results, openid)
+            
+            logger.info(f"任务处理完成: {task_id}")
+            
+        except Exception as e:
+            logger.error(f"任务处理失败: {task_id}, 错误: {e}")
+            await self._update_status(task_id, 'failed')
+    
+    async def _batch_check_cache(self, images: List[Dict], edit_type: str) -> List[Optional[Dict]]:
+        """批量检查所有图片的缓存（一次性查询所有哈希）"""
+        # 计算所有图片的哈希
+        image_hashes = []
+        image_filenames = {}
+        for index, image_data in enumerate(images):
+            image_bytes = image_data['bytes']
+            image_hash = calculate_hash(image_bytes)
+            image_hashes.append((image_hash, index))
+            image_filenames[index] = image_data.get('filename', '')
+        
+        # 批量查询缓存
+        cache_map = {}  # {image_hash: result_url}
+        if image_hashes:
+            async with db.get_connection() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    # 构建IN查询（如果图片数量多，可以分批查询）
+                    placeholders = ','.join(['%s'] * len(image_hashes))
+                    hash_list = [h[0] for h in image_hashes]
+                    
+                    await cursor.execute(
+                        f"""SELECT image_hash, result_url FROM image_edit_cache 
+                           WHERE image_hash IN ({placeholders}) AND edit_type = %s""",
+                        hash_list + [edit_type]
+                    )
+                    
+                    for row in await cursor.fetchall():
+                        cache_map[row['image_hash']] = row['result_url']
+        
+        # 构建结果列表（按原始顺序）
+        cache_results = [None] * len(images)
+        for image_hash, index in image_hashes:
+            if image_hash in cache_map:
+                cache_results[index] = {
+                    'index': index,
+                    'filename': image_filenames[index],
+                    'status': 'completed',
+                    'result_url': cache_map[image_hash],
+                    'enhanced_uri': cache_map[image_hash],
+                    'from_cache': True
+                }
+        
+        return cache_results
+    
+    async def _edit_single_image_api_call(
+        self,
+        index: int,
+        image_data: Dict,
+        edit_type: str,
+        edit_params: Dict
+    ) -> Dict:
+        """只调用API处理单张图片（不检查缓存，因为已经批量检查过了）"""
+        try:
+            image_bytes = image_data['bytes']
+            
+            # 直接调用API
+            result_url, from_cache = await self._call_aliyun_api(
+                image_bytes, edit_type, edit_params
+            )
+            
+            return {
+                'index': index,
+                'filename': image_data.get('filename', ''),
+                'status': 'completed',
+                'result_url': result_url,
+                'enhanced_uri': result_url,
+                'from_cache': from_cache
+            }
+        except Exception as e:
+            logger.error(f"图片 {index} 处理失败: {e}")
+            return {
+                'index': index,
+                'filename': image_data.get('filename', ''),
+                'status': 'failed',
+                'error': str(e)
+            }
+    
+    async def _edit_single_image_with_cache(
+        self,
+        index: int,
+        image_data: Dict,
+        edit_type: str,
+        edit_params: Dict
+    ) -> Dict:
+        """编辑单张图片（带缓存检查）"""
+        try:
+            image_bytes = image_data['bytes']
+            image_hash = calculate_hash(image_bytes)
+            
+            # 先查询缓存
+            async with db.get_connection() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    await cursor.execute(
+                        """SELECT result_url FROM image_edit_cache 
+                           WHERE image_hash = %s AND edit_type = %s""",
+                        (image_hash, edit_type)
+                    )
+                    cache = await cursor.fetchone()
+                    
+                    if cache:
+                        logger.info(f"缓存命中: image_hash={image_hash[:16]}...")
+                        return {
+                            'index': index,
+                            'filename': image_data['filename'],
+                            'status': 'completed',
+                            'result_url': cache['result_url'],
+                            'from_cache': True
+                        }
+            
+            # 缓存未命中，调用API
+            result_url, from_cache = await self._call_aliyun_api(
+                image_bytes, edit_type, edit_params
+            )
+            
+            return {
+                'index': index,
+                'filename': image_data['filename'],
+                'status': 'completed',
+                'result_url': result_url,
+                'from_cache': from_cache
+            }
+        except Exception as e:
+            logger.error(f"图片 {index} 处理失败: {e}")
+            return {
+                'index': index,
+                'filename': image_data.get('filename', ''),
+                'status': 'failed',
+                'error': str(e)
+            }
 
 
 # 全局服务实例

@@ -112,6 +112,11 @@ web_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")
 if os.path.exists(web_path):
     app.mount("/static", StaticFiles(directory=web_path), name="static")
     
+    # 图像编辑结果图片服务
+    images_path = os.path.join(web_path, "images")
+    if os.path.exists(images_path):
+        app.mount("/images", StaticFiles(directory=images_path), name="images")
+    
     @app.get("/", tags=["root"])
     async def root():
         """根路径 - 返回Web管理界面"""
