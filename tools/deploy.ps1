@@ -10,8 +10,7 @@ $ErrorActionPreference = "Stop"
 
 # 需要部署的文件（按需增减）
 $Files = @(
-  "app/api/user.py",
-  "app/api/auth.py"
+  "app/services/image_editor.py"
 )
 
 function ThrowIfFailed($Message) {

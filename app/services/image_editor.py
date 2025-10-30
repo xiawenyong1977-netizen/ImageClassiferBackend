@@ -140,11 +140,32 @@ class ImageEditService:
         """
         dashscope.api_key = settings.LLM_API_KEY
         
+        # 先保留原始字节用于计算缓存哈希（避免压缩影响缓存命中）
+        original_bytes = image_bytes
+        
+        # 确保单条 data-uri 大小不超过 10,485,760 字节（base64 膨胀约 4/3）
+        try:
+            from app.utils.image_utils import ImageUtils
+            MAX_DATA_URI_BYTES = 10_485_760
+            # 估算 base64 长度：约为原始字节 * 4 / 3
+            def will_exceed(b: bytes) -> bool:
+                approx_b64_len = int(len(b) * 4 / 3) + 64  # 预留前缀/行开销
+                return approx_b64_len > MAX_DATA_URI_BYTES
+            if will_exceed(image_bytes):
+                # 以 7MB 为目标反复压缩一次（ImageUtils 内部会等比缩放+JPEG压缩）
+                image_bytes = ImageUtils.compress_image(image_bytes, max_size_kb=7000)
+                # 仍超出则再压至 5MB
+                if will_exceed(image_bytes):
+                    image_bytes = ImageUtils.compress_image(image_bytes, max_size_kb=5000)
+        except Exception:
+            # 压缩失败则按原图继续，后续由 API 报错
+            pass
+
         image_base64 = base64.b64encode(image_bytes).decode('utf-8')
         prompt = edit_params.get('prompt', '修复面部瑕疵和皱纹，提亮肤色，保持人物原貌不变')
         
         # 生成图片哈希
-        image_hash = calculate_hash(image_bytes)
+        image_hash = calculate_hash(original_bytes)
         
         # 从image_edit_cache表查询缓存
         try:
@@ -299,24 +320,30 @@ class ImageEditService:
                 await conn.commit()
     
     async def _save_results(self, task_id: str, results: List[Dict], openid: Optional[str] = None):
-        """保存任务结果并扣除用户额度"""
+        """保存任务结果并扣除用户额度
+        注意：completed_images 表示已处理数量（成功或失败都计入），progress 同理。
+        额度扣减仅按成功数量统计。
+        """
         async with db.get_connection() as conn:
             async with conn.cursor() as cursor:
-                # 保存任务结果
+                # 保存任务结果，并确保完成数与进度准确（成功或失败都计为已处理）
+                total_images = len(results)
+                processed_count = len([r for r in results if r and r.get('status') in ('completed', 'failed')])
+                success_count = len([r for r in results if r and r.get('status') == 'completed'])
+                progress = (processed_count / total_images) * 100 if total_images > 0 else 0
                 await cursor.execute(
-                    "UPDATE image_edit_tasks SET results = %s, status = %s WHERE task_id = %s",
-                    (json.dumps(results), 'completed', task_id)
+                    "UPDATE image_edit_tasks SET results = %s, status = %s, completed_images = %s, progress = %s WHERE task_id = %s",
+                    (json.dumps(results), 'completed', processed_count, progress, task_id)
                 )
                 
                 # 如果传入了openid，扣除用户额度
                 if openid:
-                    # 统计请求的图片总数量
+                    # 统计请求与成功数量（不区分缓存还是API调用，只要成功返回就扣减）
                     total_images = len(results)
-                    # 统计成功的图片数量（不区分缓存还是API调用，只要成功返回就扣减）
-                    success_count = len([r for r in results if r.get('status') == 'completed'])
+                    success_count = len([r for r in results if r and r.get('status') == 'completed'])
                     
                     # 统计缓存命中的数量（用于日志）
-                    cache_count = len([r for r in results if r.get('status') == 'completed' and r.get('from_cache', False)])
+                    cache_count = len([r for r in results if r and r.get('status') == 'completed' and r.get('from_cache', False)])
                     api_count = success_count - cache_count
                     
                     if success_count > 0:
@@ -438,6 +465,8 @@ class ImageEditService:
                         }
                 await self._update_results_incremental(task_id, all_results)
                 logger.info(f"缓存命中 {cache_hit_count}/{len(images)} 张，已实时更新结果")
+                # 即时更新进度，反映缓存命中的已完成数量
+                await self._update_progress(task_id, cache_hit_count, len(images))
             
             # 4. 处理缓存未命中的图片（串行调用API）
             api_count = 0
@@ -459,9 +488,9 @@ class ImageEditService:
                 # 实时保存已完成的图片结果
                 await self._update_results_incremental(task_id, all_results)
                 
-                # 更新进度
-                completed = sum(1 for r in all_results if r and r.get('status') == 'completed')
-                await self._update_progress(task_id, completed, len(images))
+                # 更新进度：已处理数量（成功或失败都计入）
+                processed = sum(1 for r in all_results if r and r.get('status') in ('completed', 'failed'))
+                await self._update_progress(task_id, processed, len(images))
             
             logger.info(f"处理完成: 缓存命中={cache_hit_count}张, API调用={api_count}张")
             
