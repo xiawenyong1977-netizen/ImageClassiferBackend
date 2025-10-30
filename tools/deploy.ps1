@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 
 # 需要部署的文件（按需增减）
 $Files = @(
-  "app/services/image_editor.py"
+  "app/database.py"
 )
 
 function ThrowIfFailed($Message) {
