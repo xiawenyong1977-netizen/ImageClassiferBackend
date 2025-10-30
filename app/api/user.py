@@ -2,7 +2,7 @@
 用户管理相关API
 """
 
-from fastapi import APIRouter, Header, HTTPException, Response
+from fastapi import APIRouter, Header, HTTPException, Response, Query
 from fastapi.responses import JSONResponse
 import logging
 import aiomysql
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/v1/user", tags=["用户"])
 
 @router.get("/credits", summary="查询用户额度")
 async def get_user_credits(
-    client_id: str = None,
+    client_id: str = Query(None, description="客户端ID（用于扫码关注场景）"),
     x_wechat_openid: str = Header(None, description="微信openid")
 ):
     """
@@ -42,17 +42,30 @@ async def get_user_credits(
             
             async with db.get_connection() as conn:
                 async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    # 先查询所有状态，用于调试
                     await cursor.execute(
                         """SELECT openid, status FROM wechat_qrcode_bindings 
-                           WHERE client_id = %s AND status = 'completed'""",
+                           WHERE client_id = %s""",
+                        (client_id,)
+                    )
+                    all_bindings = await cursor.fetchall()
+                    logger.info(f"查询到绑定记录数: {len(all_bindings)}, client_id={client_id}")
+                    
+                    # 以是否存在openid为完成判定（保留status但不作为门槛）
+                    await cursor.execute(
+                        """SELECT openid, status FROM wechat_qrcode_bindings 
+                               WHERE client_id = %s AND openid IS NOT NULL 
+                               ORDER BY completed_at DESC, id DESC LIMIT 1""",
                         (client_id,)
                     )
                     binding = await cursor.fetchone()
                     
                     if not binding or not binding['openid']:
+                        logger.warning(f"未找到有效绑定(openid为空): client_id={client_id}, 所有记录={all_bindings}")
                         raise HTTPException(status_code=404, detail="用户未关注公众号")
                     
                     openid = binding['openid']
+                    logger.info(f"找到openid: {openid[:16]}...")
         else:
             raise HTTPException(status_code=400, detail="缺少client_id或openid参数")
         
@@ -95,7 +108,7 @@ async def get_user_credits(
 
 @router.get("/member-status", summary="查询会员状态")
 async def get_member_status(
-    client_id: str = None,
+    client_id: str = Query(None, description="客户端ID（用于扫码关注场景）"),
     x_wechat_openid: str = Header(None, description="微信openid")
 ):
     """
@@ -122,14 +135,16 @@ async def get_member_status(
             
             async with db.get_connection() as conn:
                 async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    # 以是否存在openid为完成判定（保留status但不作为门槛）
                     await cursor.execute(
                         """SELECT openid, status FROM wechat_qrcode_bindings 
-                           WHERE client_id = %s AND status = 'completed'""",
+                               WHERE client_id = %s AND openid IS NOT NULL 
+                               ORDER BY completed_at DESC, id DESC LIMIT 1""",
                         (client_id,)
                     )
                     binding = await cursor.fetchone()
                     
-                    if not binding or not binding['openid']:
+                    if not binding or not binding.get('openid'):
                         raise HTTPException(status_code=404, detail="用户未关注公众号")
                     
                     openid = binding['openid']

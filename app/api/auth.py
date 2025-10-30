@@ -250,7 +250,8 @@ async def generate_qrcode(request: GenerateQRCodeRequest):
                     """INSERT INTO wechat_qrcode_bindings 
                        (client_id, scene_id, status, created_at)
                        VALUES (%s, 0, 'pending', NOW())
-                       ON DUPLICATE KEY UPDATE status = 'pending', created_at = NOW()""",
+                       ON DUPLICATE KEY UPDATE 
+                           created_at = NOW()""",
                     (client_id,)
                 )
                 
