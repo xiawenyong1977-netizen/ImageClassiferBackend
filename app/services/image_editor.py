@@ -35,6 +35,12 @@ class ImageEditService:
     ) -> str:
         """提交编辑任务（同步处理，确保数据已写入数据库）"""
         
+        # 参数校验：必须提供edit_type和prompt，避免降级处理隐藏问题
+        if not edit_type:
+            raise ValueError("edit_type参数缺失")
+        if not edit_params or 'prompt' not in edit_params:
+            raise ValueError("edit_params中必须包含prompt参数")
+        
         # 生成任务ID
         from app.utils.id_generator import IDGenerator
         task_id = IDGenerator.generate_request_id("task")
@@ -162,7 +168,8 @@ class ImageEditService:
             pass
 
         image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-        prompt = edit_params.get('prompt', '修复面部瑕疵和皱纹，提亮肤色，保持人物原貌不变')
+        prompt = edit_params['prompt']  # 已经在submit_task中校验过，这里直接取
+        logger.info(f"使用编辑提示词: '{prompt}'")
         
         # 生成图片哈希
         image_hash = calculate_hash(original_bytes)
@@ -400,6 +407,12 @@ class ImageEditService:
     ) -> str:
         """提交编辑任务（异步处理，立即返回task_id）"""
         
+        # 参数校验：必须提供edit_type和prompt，避免降级处理隐藏问题
+        if not edit_type:
+            raise ValueError("edit_type参数缺失")
+        if not edit_params or 'prompt' not in edit_params:
+            raise ValueError("edit_params中必须包含prompt参数")
+        
         # 生成任务ID
         from app.utils.id_generator import IDGenerator
         task_id = IDGenerator.generate_request_id("task")
@@ -438,7 +451,7 @@ class ImageEditService:
             
             # 1. 先批量检查所有图片的缓存
             logger.info(f"批量检查 {len(images)} 张图片的缓存...")
-            cache_results = await self._batch_check_cache(images, edit_type)
+            cache_results = await self._batch_check_cache(images, edit_type, edit_params)
             
             # 2. 初始化结果数组（按原始顺序）
             all_results = [None] * len(images)
@@ -503,7 +516,7 @@ class ImageEditService:
             logger.error(f"任务处理失败: {task_id}, 错误: {e}")
             await self._update_status(task_id, 'failed')
     
-    async def _batch_check_cache(self, images: List[Dict], edit_type: str) -> List[Optional[Dict]]:
+    async def _batch_check_cache(self, images: List[Dict], edit_type: str, edit_params: Dict) -> List[Optional[Dict]]:
         """批量检查所有图片的缓存（一次性查询所有哈希）"""
         # 计算所有图片的哈希
         image_hashes = []
@@ -513,6 +526,9 @@ class ImageEditService:
             image_hash = calculate_hash(image_bytes)
             image_hashes.append((image_hash, index))
             image_filenames[index] = image_data.get('filename', '')
+        
+        # 提取prompt参数用于缓存查询（已经在submit_task中校验过，这里直接取）
+        prompt = edit_params['prompt']
         
         # 批量查询缓存
         cache_map = {}  # {image_hash: result_url}
@@ -525,8 +541,8 @@ class ImageEditService:
                     
                     await cursor.execute(
                         f"""SELECT image_hash, result_url FROM image_edit_cache 
-                           WHERE image_hash IN ({placeholders}) AND edit_type = %s""",
-                        hash_list + [edit_type]
+                           WHERE image_hash IN ({placeholders}) AND edit_type = %s AND prompt = %s""",
+                        hash_list + [edit_type, prompt]
                     )
                     
                     for row in await cursor.fetchall():
