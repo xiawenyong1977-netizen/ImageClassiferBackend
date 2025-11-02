@@ -345,17 +345,18 @@ class ImageEditService:
                 
                 # 如果传入了openid，扣除用户额度
                 if openid:
-                    # 统计请求与成功数量（不区分缓存还是API调用，只要成功返回就扣减）
+                    # 统计请求与成功数量
                     total_images = len(results)
                     success_count = len([r for r in results if r and r.get('status') == 'completed'])
                     
-                    # 统计缓存命中的数量（用于日志）
+                    # 统计缓存命中的数量（用于日志和扣减）
                     cache_count = len([r for r in results if r and r.get('status') == 'completed' and r.get('from_cache', False)])
                     api_count = success_count - cache_count
                     
-                    if success_count > 0:
+                    # 只对API调用的成功数量进行扣减，缓存命中的不扣减
+                    if api_count > 0:
                         # 使用 credit_service 扣减额度（会员和非会员都扣减）
-                        for _ in range(success_count):
+                        for _ in range(api_count):
                             success, msg = await credit_service.check_and_deduct_credit(openid, deduct_on_success=True)
                             if not success:
                                 logger.warning(f"扣减额度失败: {msg}")
@@ -365,10 +366,12 @@ class ImageEditService:
                             """INSERT INTO credits_usage 
                                (openid, task_id, task_type, credits_used, request_image_count, success_image_count)
                                VALUES (%s, %s, 'image_edit', %s, %s, %s)""",
-                            (openid, task_id, success_count, total_images, success_count)
+                            (openid, task_id, api_count, total_images, success_count)
                         )
                         
-                        logger.info(f"已扣除额度: openid={openid[:16]}..., 总扣除={success_count}张(请求={total_images}张, 缓存={cache_count}, API={api_count})")
+                        logger.info(f"已扣除额度: openid={openid[:16]}..., 扣除={api_count}张(总请求={total_images}张, 成功={success_count}, 缓存={cache_count}, API={api_count})")
+                    elif cache_count > 0:
+                        logger.info(f"缓存命中，不扣减额度: openid={openid[:16]}..., 成功={success_count}张全部来自缓存")
                 
                 await conn.commit()
     
