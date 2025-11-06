@@ -649,11 +649,65 @@ async def check_follow(client_id: str):
 
 # ===== 微信公众号菜单管理 =====
 
+@router.get("/wechat/get-menu", summary="查询当前微信公众号菜单")
+async def get_wechat_menu():
+    """
+    查询当前微信公众号菜单
+    """
+    try:
+        logger.info("开始查询微信公众号菜单...")
+        
+        # 获取access_token
+        token_response = requests.get(
+            "https://api.weixin.qq.com/cgi-bin/token",
+            params={
+                'grant_type': 'client_credential',
+                'appid': settings.WECHAT_APPID,
+                'secret': settings.WECHAT_SECRET
+            },
+            timeout=10
+        ).json()
+        
+        if 'errcode' in token_response:
+            logger.error(f"获取access_token失败: {token_response}")
+            raise HTTPException(status_code=400, detail="获取access_token失败")
+        
+        access_token = token_response['access_token']
+        
+        # 查询菜单
+        get_response = requests.get(
+            f"https://api.weixin.qq.com/cgi-bin/menu/get?access_token={access_token}",
+            timeout=10
+        ).json()
+        
+        if 'menu' in get_response:
+            logger.info("菜单查询成功")
+            return {
+                "success": True,
+                "menu": get_response.get('menu'),
+                "conditionalmenu": get_response.get('conditionalmenu')
+            }
+        else:
+            logger.warning(f"菜单查询结果: {get_response}")
+            return {
+                "success": True,
+                "message": "当前没有菜单或查询失败",
+                "response": get_response
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"查询菜单异常: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="查询菜单失败")
+
+
 @router.post("/wechat/create-menu", summary="创建微信公众号菜单")
 async def create_wechat_menu():
     """
     创建微信公众号菜单
-    包含：开通会员、购买额度、我的额度
+    一级菜单：芯图相册、会员服务
+    会员服务二级菜单：开通会员、购买额度、额度查询
     """
     try:
         logger.info("开始创建微信公众号菜单...")
@@ -674,6 +728,18 @@ async def create_wechat_menu():
             raise HTTPException(status_code=400, detail="获取access_token失败")
         
         access_token = token_response['access_token']
+        logger.info(f"成功获取access_token: {access_token[:20]}...")
+        
+        # 先删除旧菜单
+        logger.info("正在删除旧菜单...")
+        delete_response = requests.get(
+            f"https://api.weixin.qq.com/cgi-bin/menu/delete?access_token={access_token}",
+            timeout=10
+        ).json()
+        if delete_response.get('errcode') == 0:
+            logger.info("旧菜单删除成功")
+        else:
+            logger.warning(f"删除旧菜单失败（可能不存在）: {delete_response}")
         
         # 定义菜单结构（使用网页授权URL）
         # 注意：微信网页授权需要跳转到授权页面获取code，然后回调到目标页面
@@ -687,29 +753,47 @@ async def create_wechat_menu():
         credits_url = f"{auth_base_url}?appid={appid}&redirect_uri={quote('https://www.xintuxiangce.top/credits.html')}&response_type=code&scope=snsapi_base&state=credits#wechat_redirect"
         credits_info_url = f"{auth_base_url}?appid={appid}&redirect_uri={quote('https://www.xintuxiangce.top/credits_info.html')}&response_type=code&scope=snsapi_base&state=credits_info#wechat_redirect"
         
+        # 芯图相册直接跳转URL（不需要授权）
+        xintu_url = "https://www.xintuxiangce.top"
+        
         menu_data = {
             "button": [
                 {
                     "type": "view",
-                    "name": "开通会员",
-                    "url": member_url
+                    "name": "芯图相册",
+                    "url": xintu_url
                 },
                 {
-                    "type": "view",
-                    "name": "购买额度",
-                    "url": credits_url
-                },
-                {
-                    "type": "view",
-                    "name": "我的额度",
-                    "url": credits_info_url
+                    "name": "会员服务",
+                    "sub_button": [
+                        {
+                            "type": "view",
+                            "name": "开通会员",
+                            "url": member_url
+                        },
+                        {
+                            "type": "view",
+                            "name": "购买额度",
+                            "url": credits_url
+                        },
+                        {
+                            "type": "view",
+                            "name": "额度查询",
+                            "url": credits_info_url
+                        }
+                    ]
                 }
             ]
         }
         
+        # 打印菜单结构（用于调试）
+        logger.info("菜单结构:")
+        logger.info(json.dumps(menu_data, indent=2, ensure_ascii=False))
+        
         # 调用微信菜单创建接口（使用data参数确保UTF-8编码）
         menu_json = json.dumps(menu_data, ensure_ascii=False).encode('utf-8')
         
+        logger.info("正在创建新菜单...")
         create_response = requests.post(
             f"https://api.weixin.qq.com/cgi-bin/menu/create?access_token={access_token}",
             data=menu_json,
@@ -717,11 +801,15 @@ async def create_wechat_menu():
             timeout=10
         ).json()
         
+        logger.info(f"微信API响应: {json.dumps(create_response, ensure_ascii=False)}")
+        
         if create_response.get('errcode') == 0:
             logger.info("公众号菜单创建成功")
             return {
                 "success": True,
-                "message": "菜单创建成功"
+                "message": "菜单创建成功",
+                "menu_structure": menu_data,
+                "wechat_response": create_response
             }
         else:
             logger.error(f"菜单创建失败: {create_response}")
