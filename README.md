@@ -90,7 +90,7 @@ cp env.example .env
 mysql -u root -p -e "CREATE DATABASE image_classifier;"
 
 # 导入数据库结构
-mysql -u root -p image_classifier < sql/init.sql
+mysql -u root -p image_classifier < tools/数据库/init.sql
 ```
 
 5. **启动服务**
@@ -190,11 +190,12 @@ ImageClassifierBackend/
 │   ├── database.py        # 数据库连接
 │   └── main.py           # 应用入口
 ├── docs/                  # 📚 项目文档
-├── tools/                 # 🔧 工具脚本
-│   ├── delete_user_cache.py  # 缓存管理
-│   ├── check_user_data.py    # 数据查询
-│   └── test_local_inference.py # 测试工具
-├── sql/                   # 数据库脚本
+├── tools/                 # 🔧 工具脚本（包含数据库脚本）
+│   ├── 部署/              # 部署脚本
+│   ├── 数据库/            # 数据库脚本和SQL脚本
+│   ├── 同步/              # 数据同步脚本
+│   ├── 测试/              # 测试脚本
+│   └── 工具/              # 其他工具脚本
 ├── web/                   # Web管理界面
 ├── requirements.txt       # Python依赖
 └── env.example           # 环境变量示例

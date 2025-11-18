@@ -712,7 +712,14 @@ async def create_wechat_menu():
     try:
         logger.info("开始创建微信公众号菜单...")
         
+        # 检查微信配置
+        if not settings.WECHAT_APPID or not settings.WECHAT_SECRET:
+            error_msg = f"微信配置缺失: APPID={bool(settings.WECHAT_APPID)}, SECRET={bool(settings.WECHAT_SECRET)}"
+            logger.error(error_msg)
+            raise HTTPException(status_code=400, detail=error_msg)
+        
         # 获取access_token
+        logger.info(f"正在获取access_token, APPID: {settings.WECHAT_APPID[:8]}...")
         token_response = requests.get(
             "https://api.weixin.qq.com/cgi-bin/token",
             params={
@@ -724,8 +731,9 @@ async def create_wechat_menu():
         ).json()
         
         if 'errcode' in token_response:
-            logger.error(f"获取access_token失败: {token_response}")
-            raise HTTPException(status_code=400, detail="获取access_token失败")
+            error_msg = f"获取access_token失败: {token_response.get('errmsg', '未知错误')} (错误码: {token_response.get('errcode')})"
+            logger.error(f"微信API返回错误: {token_response}")
+            raise HTTPException(status_code=400, detail=error_msg)
         
         access_token = token_response['access_token']
         logger.info(f"成功获取access_token: {access_token[:20]}...")
@@ -749,9 +757,9 @@ async def create_wechat_menu():
         appid = settings.WECHAT_APPID
         
         # 构建授权URL（redirect_uri需要URL编码）
-        member_url = f"{auth_base_url}?appid={appid}&redirect_uri={quote('https://www.xintuxiangce.top/member.html')}&response_type=code&scope=snsapi_base&state=member#wechat_redirect"
-        credits_url = f"{auth_base_url}?appid={appid}&redirect_uri={quote('https://www.xintuxiangce.top/credits.html')}&response_type=code&scope=snsapi_base&state=credits#wechat_redirect"
-        credits_info_url = f"{auth_base_url}?appid={appid}&redirect_uri={quote('https://www.xintuxiangce.top/credits_info.html')}&response_type=code&scope=snsapi_base&state=credits_info#wechat_redirect"
+        member_url = f"{auth_base_url}?appid={appid}&redirect_uri={quote('https://www.xintuxiangce.top/wechat/member.html')}&response_type=code&scope=snsapi_base&state=member#wechat_redirect"
+        credits_url = f"{auth_base_url}?appid={appid}&redirect_uri={quote('https://www.xintuxiangce.top/wechat/credits.html')}&response_type=code&scope=snsapi_base&state=credits#wechat_redirect"
+        credits_info_url = f"{auth_base_url}?appid={appid}&redirect_uri={quote('https://www.xintuxiangce.top/wechat/credits_info.html')}&response_type=code&scope=snsapi_base&state=credits_info#wechat_redirect"
         
         # 芯图相册直接跳转URL（不需要授权）
         xintu_url = "https://www.xintuxiangce.top"

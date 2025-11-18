@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>芯图相册-后端管理系统</title>
+    <link rel="icon" type="image/png" href="/imageclassify.png">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .tab-button {
+            padding: 12px 24px;
+            background: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            transition: all 0.3s;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .tab-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .tab-button.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+
+        .card h2 {
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            color: #333;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        .stat-card h3 {
+            font-size: 0.9rem;
+            opacity: 0.9;
+            margin-bottom: 10px;
+        }
+
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stat-card .sub {
+            font-size: 0.85rem;
+            opacity: 0.8;
+        }
+
+        .upload-area {
+            border: 2px dashed #667eea;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: #f8f9fa;
+        }
+
+        .upload-area:hover {
+            border-color: #764ba2;
+            background: #f0f1f5;
+        }
+
+        .upload-area.dragover {
+            border-color: #764ba2;
+            background: #e8e9f0;
+        }
+
+        .preview-image {
+            max-width: 100%;
+            max-height: 400px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        .result-box {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+
+        .result-box h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+
+        .result-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .result-item:last-child {
+            border-bottom: none;
+        }
+
+        .result-label {
+            font-weight: 500;
+            color: #666;
+        }
+
+        .result-value {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .category-badge {
+            display: inline-block;
+            padding: 6px 16px;
+            background: #667eea;
+            color: white;
+            border-radius: 20px;
+            font-size: 1.1rem;
+        }
+
+        .confidence-bar {
+            width: 100%;
+            height: 20px;
+            background: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.5s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 0.85rem;
+            font-weight: bold;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #333;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 1rem;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .category-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .category-item {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .category-item .name {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .category-item .count {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+        }
+
+        tr:hover {
+            background: #f8f9fa;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+
+        .status-dot.green {
+            background: #28a745;
+        }
+
+        .status-dot.red {
+            background: #dc3545;
+        }
+
+        .footer {
+            text-align: center;
+            color: white;
+            margin-top: 40px;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <div style="flex: 1;"></div>
+                <h1 style="margin: 0; flex: 2; text-align: center;">
+                    <img src="/imageclassify.png" alt="logo" style="width: 50px; height: 50px; vertical-align: middle; margin-right: 10px;">芯图相册后端管理系统
+                </h1>
+                <div style="flex: 1; text-align: right;">
+                    <span id="user-info" style="margin-right: 15px; font-size: 0.9rem; opacity: 0.9;"></span>
+                    <button onclick="logout()" style="padding: 8px 20px; background: rgba(255,255,255,0.2); border: 2px solid white; border-radius: 6px; color: white; cursor: pointer; font-size: 0.9rem; font-weight: 500;">
+                        🚪 退出登录
+                    </button>
+                </div>
+            </div>
+            <p>基于大模型的智能图片分类服务</p>
+        </div>
+
+        <!-- 系统状态 -->
+        <div class="card">
+            <h2>系统状态</h2>
+            <div id="system-status">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>正在加载...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 标签页 -->
+        <div class="tabs">
+            <button class="tab-button active" onclick="showTab('stats')">📊 统计数据</button>
+            <button class="tab-button" onclick="showTab('test')">🧪 分类测试</button>
+            <button class="tab-button" onclick="showTab('location')">📍 地理位置</button>
+        </div>
+
+        <!-- 统计数据标签页 -->
+        <div id="stats-tab" class="tab-content active">
+            <div class="card">
+                <h2>今日统计</h2>
+                <div id="today-stats">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>缓存效率</h2>
+                <div id="cache-stats">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>分类分布</h2>
+                <div id="category-distribution">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>🤖 推理方式统计</h2>
+                <div id="inference-method-stats">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>📦 批量缓存查询统计</h2>
+                <div id="batch-cache-stats">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>📸 批量分类统计</h2>
+                <div id="batch-classify-stats">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>🎨 图片编辑统计</h2>
+                <div id="image-edit-stats">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 分类测试标签页 -->
+        <div id="test-tab" class="tab-content">
+            <div class="card">
+                <h2>图片分类测试</h2>
+                
+                <div class="upload-area" id="upload-area">
+                    <input type="file" id="file-input" accept="image/*" style="display: none;">
+                    <p style="font-size: 3rem; margin-bottom: 10px;">📁</p>
+                    <p style="font-size: 1.2rem; color: #667eea; font-weight: 500;">点击或拖拽图片到此处</p>
+                    <p style="color: #999; margin-top: 10px;">支持 JPG, PNG, WebP 格式，最大10MB</p>
+                </div>
+
+                <div id="preview-area" class="hidden">
+                    <img id="preview-image" class="preview-image" alt="预览">
+                    <div style="text-align: center; margin: 20px 0;">
+                        <button class="btn btn-primary" onclick="classifyImage()">🚀 开始分类</button>
+                        <button class="btn" onclick="resetUpload()" style="margin-left: 10px; background: #6c757d; color: white;">重新选择</button>
+                    </div>
+                </div>
+
+                <div id="result-area" class="hidden">
+                    <div class="result-box">
+                        <h3>分类结果</h3>
+                        <div id="classification-result"></div>
+                    </div>
+                </div>
+
+                <div id="test-alert"></div>
+            </div>
+        </div>
+
+        <!-- 地理位置测试标签页 -->
+        <div id="location-tab" class="tab-content">
+            <div class="card">
+                <h2>📊 位置数据库统计</h2>
+                <div id="location-stats">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>📍 最近城市查询</h2>
+                <div class="form-group">
+                    <label for="nearest-latitude">纬度 (Latitude)</label>
+                    <input type="number" id="nearest-latitude" step="0.000001" min="-90" max="90" placeholder="例如：39.9042" value="39.9042">
+                    <small style="color: #666;">范围：-90 到 90</small>
+                </div>
+                <div class="form-group">
+                    <label for="nearest-longitude">经度 (Longitude)</label>
+                    <input type="number" id="nearest-longitude" step="0.000001" min="-180" max="180" placeholder="例如：116.4074" value="116.4074">
+                    <small style="color: #666;">范围：-180 到 180</small>
+                </div>
+                <button class="btn btn-primary" onclick="queryNearestCity()">🔍 查询最近城市</button>
+                
+                <div id="nearest-city-result" style="margin-top: 20px;"></div>
+            </div>
+
+            <div class="card">
+                <h2>📍 附近城市列表</h2>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                    <div class="form-group">
+                        <label for="nearby-latitude">纬度 (Latitude)</label>
+                        <input type="number" id="nearby-latitude" step="0.000001" min="-90" max="90" placeholder="例如：39.9042" value="39.9042">
+                    </div>
+                    <div class="form-group">
+                        <label for="nearby-longitude">经度 (Longitude)</label>
+                        <input type="number" id="nearby-longitude" step="0.000001" min="-180" max="180" placeholder="例如：116.4074" value="116.4074">
+                    </div>
+                    <div class="form-group">
+                        <label for="nearby-limit">返回数量</label>
+                        <input type="number" id="nearby-limit" min="1" max="100" value="10" placeholder="1-100">
+                    </div>
+                    <div class="form-group">
+                        <label for="nearby-max-distance">最大距离(公里，可选)</label>
+                        <input type="number" id="nearby-max-distance" min="0" step="0.1" placeholder="留空表示不限制">
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="queryNearbyCities()">🔍 查询附近城市</button>
+                
+                <div id="nearby-cities-result" style="margin-top: 20px;"></div>
+            </div>
+
+            <div class="card">
+                <h2>💡 常用城市坐标参考</h2>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+                    <button class="btn" onclick="setCoordinates(39.9042, 116.4074)" style="background: #28a745; color: white;">📍 北京</button>
+                    <button class="btn" onclick="setCoordinates(31.2304, 121.4737)" style="background: #28a745; color: white;">📍 上海</button>
+                    <button class="btn" onclick="setCoordinates(23.1291, 113.2644)" style="background: #28a745; color: white;">📍 广州</button>
+                    <button class="btn" onclick="setCoordinates(22.5431, 114.0579)" style="background: #28a745; color: white;">📍 深圳</button>
+                    <button class="btn" onclick="setCoordinates(30.5728, 104.0668)" style="background: #28a745; color: white;">📍 成都</button>
+                    <button class="btn" onclick="setCoordinates(30.5872, 114.2881)" style="background: #28a745; color: white;">📍 武汉</button>
+                </div>
+            </div>
+        </div>
+
+
+        <div class="footer">
+            <p>芯图相册后端管理系统 v1.0 | Powered by FastAPI</p>
+        </div>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>
+

@@ -13,7 +13,13 @@ import os
 
 from app.config import settings
 from app.database import db
-from app.api import classify, stats, health, location, auth, local_classify, config, release, image_edit, user, payment
+from app.api import classify, stats, health, location, auth, config, release, image_edit, user, payment
+# 延迟导入local_classify（避免启动时导入ultralytics导致的问题）
+try:
+    from app.api import local_classify
+except ImportError as e:
+    logger.warning(f"本地推理模块导入失败，将禁用本地推理功能: {e}")
+    local_classify = None
 from app.api.auth import wechat_message_handler, wechat_verify
 
 
@@ -81,7 +87,8 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(user.router)  # 用户管理（额度查询）
 app.include_router(classify.router)
-app.include_router(local_classify.router)  # 本地模型推理
+if local_classify is not None:
+    app.include_router(local_classify.router)  # 本地模型推理
 app.include_router(config.router)  # 运行时配置
 app.include_router(release.router)  # 发行版本上传
 app.include_router(stats.router)
@@ -107,58 +114,31 @@ async def wechat_message_push(request: Request):
     """接收微信公众号的消息推送（POST请求）"""
     return await wechat_message_handler(request)
 
-# 静态文件服务（Web管理界面）
-web_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")
-if os.path.exists(web_path):
-    app.mount("/static", StaticFiles(directory=web_path), name="static")
-    
-    # 图像编辑结果图片服务
-    images_path = os.path.join(web_path, "images")
-    if os.path.exists(images_path):
-        app.mount("/images", StaticFiles(directory=images_path), name="images")
-    
-    @app.get("/", tags=["root"])
-    async def root():
-        """根路径 - 返回Web管理界面"""
-        index_path = os.path.join(web_path, "index.html")
-        if os.path.exists(index_path):
-            return FileResponse(index_path)
-        return {
-            "service": "Image Classifier Backend",
-            "version": "1.0.0",
-            "status": "running",
-            "docs": "/docs",
-            "health": "/api/v1/health"
-        }
-    
-    # 支付相关页面的独立路由
-    @app.get("/member.html")
-    async def member_page():
-        """会员开通页面"""
-        return FileResponse(os.path.join(web_path, "member.html"))
-    
-    @app.get("/credits.html")
-    async def credits_page():
-        """购买额度页面"""
-        return FileResponse(os.path.join(web_path, "credits.html"))
-    
-    @app.get("/credits_info.html")
-    async def credits_info_page():
-        """我的额度页面"""
-        return FileResponse(os.path.join(web_path, "credits_info.html"))
-else:
-    # 如果web目录不存在，返回JSON
-    @app.get("/", tags=["root"])
-    async def root():
-        """根路径"""
-        return {
-            "service": "Image Classifier Backend",
-            "version": "1.0.0",
-            "status": "running",
-            "docs": "/docs",
-            "health": "/api/v1/health",
-            "admin": "/static/index.html"
-        }
+# 图像编辑结果图片服务（仅保留图片服务，前端页面已迁移到旧服务器）
+images_path = os.path.join(os.path.dirname(__file__), "images")
+if os.path.exists(images_path):
+    app.mount("/images", StaticFiles(directory=images_path), name="images")
+    logger.info(f"图像编辑结果图片服务已启用: {images_path}")
+
+# 微信公众号页面静态文件服务
+# 注意：虽然Nginx也配置了/wechat/路径，但lighttpd代理到8000端口会直接到FastAPI，所以FastAPI也需要配置
+wechat_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "wechat")
+if os.path.exists(wechat_path):
+    app.mount("/wechat", StaticFiles(directory=wechat_path), name="wechat")
+    logger.info(f"微信页面静态文件服务已启用: {wechat_path}")
+
+# 根路径 - 返回API信息
+@app.get("/", tags=["root"])
+async def root():
+    """根路径 - 返回API服务信息"""
+    return {
+        "service": "Image Classifier Backend API",
+        "version": "1.0.0",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/api/v1/health",
+        "api_base": "/api/v1"
+    }
 
 
 if __name__ == "__main__":

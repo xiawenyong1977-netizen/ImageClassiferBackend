@@ -6,6 +6,7 @@
 from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from typing import List, Optional
 from pydantic import BaseModel, Field
+from datetime import datetime
 import math
 import time
 
@@ -72,10 +73,11 @@ async def get_location_stats(current_user: str = Depends(get_current_user)):
             await cursor.execute(query)
             row = await cursor.fetchone()
         
-        total = row['total']
-        has_chinese = row['has_chinese']
-        above_100k = row['above_100k']
-        queryable = row['queryable']
+        # 处理可能的None值
+        total = row['total'] or 0
+        has_chinese = row['has_chinese'] or 0
+        above_100k = row['above_100k'] or 0
+        queryable = row['queryable'] or 0
         
         chinese_coverage = (has_chinese / total * 100) if total > 0 else 0
         queryable_coverage = (queryable / total * 100) if total > 0 else 0
@@ -94,6 +96,12 @@ async def get_location_stats(current_user: str = Depends(get_current_user)):
             await cursor.execute(stats_query)
             stats_row = await cursor.fetchone()
         
+        # 处理可能的None值
+        total_queries_today = stats_row['total_today'] or 0 if stats_row else 0
+        nearest_queries_today = stats_row['nearest_today'] or 0 if stats_row else 0
+        nearby_queries_today = stats_row['nearby_today'] or 0 if stats_row else 0
+        total_queries_all = stats_row['total_all'] or 0 if stats_row else 0
+        
         return LocationStats(
             total_cities=total,
             cities_with_chinese=has_chinese,
@@ -101,10 +109,10 @@ async def get_location_stats(current_user: str = Depends(get_current_user)):
             cities_queryable=queryable,
             chinese_coverage_percent=round(chinese_coverage, 2),
             queryable_coverage_percent=round(queryable_coverage, 2),
-            total_queries_today=stats_row['total_today'] or 0,
-            nearest_queries_today=stats_row['nearest_today'] or 0,
-            nearby_queries_today=stats_row['nearby_today'] or 0,
-            total_queries_all=stats_row['total_all'] or 0
+            total_queries_today=total_queries_today,
+            nearest_queries_today=nearest_queries_today,
+            nearby_queries_today=nearby_queries_today,
+            total_queries_all=total_queries_all
         )
         
     except Exception as e:
@@ -211,13 +219,13 @@ async def get_nearest_city(
         log_query = """
             INSERT INTO location_query_log 
             (query_type, latitude, longitude, result_city_id, result_city_name, 
-             result_city_name_zh, distance_km, user_id, ip_address, processing_time_ms)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             result_city_name_zh, distance_km, user_id, ip_address, processing_time_ms, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         async with db.get_cursor() as cursor:
             await cursor.execute(log_query, (
                 'nearest', latitude, longitude, city_info.id, city_info.name,
-                city_info.name_zh, city_info.distance_km, user_id, ip_address, processing_time
+                city_info.name_zh, city_info.distance_km, user_id, ip_address, processing_time, datetime.now()
             ))
         
         return city_info
@@ -335,13 +343,13 @@ async def get_nearby_cities(
             log_query = """
                 INSERT INTO location_query_log 
                 (query_type, latitude, longitude, result_city_id, result_city_name, 
-                 result_city_name_zh, result_count, distance_km, user_id, ip_address, processing_time_ms)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 result_city_name_zh, result_count, distance_km, user_id, ip_address, processing_time_ms, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             async with db.get_cursor() as cursor:
                 await cursor.execute(log_query, (
                     'nearby', latitude, longitude, first_city.id, first_city.name,
-                    first_city.name_zh, len(cities), first_city.distance_km, user_id, ip_address, processing_time
+                    first_city.name_zh, len(cities), first_city.distance_km, user_id, ip_address, processing_time, datetime.now()
                 ))
         
         return cities

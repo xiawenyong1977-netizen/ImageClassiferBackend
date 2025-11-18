@@ -127,6 +127,12 @@ class Settings(BaseSettings):
         description="微信支付回调URL"
     )
     
+    # ===== 图像编辑结果图片URL配置 =====
+    IMAGE_EDIT_BASE_URL: str = Field(
+        default="https://api.aifuture.net.cn",
+        description="图像编辑结果图片的基础URL（新服务器域名）"
+    )
+    
     JWT_ALGORITHM: str = Field(default="HS256", description="JWT算法")
     JWT_ACCESS_TOKEN_EXPIRE_DAYS: int = Field(default=1, description="Token过期天数")
     

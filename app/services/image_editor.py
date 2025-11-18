@@ -278,16 +278,20 @@ class ImageEditService:
                 image_data = response.content
             
             from app.utils.id_generator import IDGenerator
+            import os as os_module
             filename = f"{IDGenerator.generate_request_id('img')}.png"
             
-            save_dir = "/opt/ImageClassifierBackend/web/images/edited"
-            os.makedirs(save_dir, exist_ok=True)
+            # 保存到app/images/edited目录（相对于app目录）
+            app_dir = os_module.path.dirname(os_module.path.dirname(os_module.path.abspath(__file__)))
+            save_dir = os_module.path.join(app_dir, "images", "edited")
+            os_module.makedirs(save_dir, exist_ok=True)
             
-            filepath = os.path.join(save_dir, filename)
+            filepath = os_module.path.join(save_dir, filename)
             with open(filepath, 'wb') as f:
                 f.write(image_data)
             
-            public_url = f"https://www.xintuxiangce.top/images/edited/{filename}"
+            # 使用配置的基础URL（新服务器域名）
+            public_url = f"{settings.IMAGE_EDIT_BASE_URL}/images/edited/{filename}"
             logger.info(f"图片已保存: {filepath}, 公共URL: {public_url}")
             return public_url
             
