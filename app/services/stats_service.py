@@ -307,7 +307,7 @@ class StatsService:
     
     async def get_category_distribution(self) -> list:
         """
-        获取分类分布统计（从缓存表统计，包含所有分类结果）
+        获取分类分布统计（从缓存表统计，包含所有历史分类结果）
         
         Returns:
             分类分布列表
@@ -315,15 +315,14 @@ class StatsService:
         try:
             async with db.get_cursor() as cursor:
                 # 从 image_classification_cache 表统计，因为那里有完整的分类数据
-                # 统计今日新增的缓存记录（通过 created_at 判断）
+                # 统计所有历史数据
                 sql = """
                 SELECT 
                     category,
                     COUNT(*) as count,
                     ROUND(AVG(confidence), 4) as avg_confidence,
-                    ROUND(COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM image_classification_cache WHERE DATE(created_at) = CURDATE()), 0), 2) as percentage
+                    ROUND(COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM image_classification_cache), 0), 2) as percentage
                 FROM image_classification_cache
-                WHERE DATE(created_at) = CURDATE()
                 GROUP BY category
                 ORDER BY count DESC
                 """
