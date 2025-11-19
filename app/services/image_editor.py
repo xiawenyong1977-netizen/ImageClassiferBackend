@@ -410,7 +410,8 @@ class ImageEditService:
         edit_type: str,
         edit_params: Dict,
         user_id: Optional[str] = None,
-        openid: Optional[str] = None
+        openid: Optional[str] = None,
+        ip_address: Optional[str] = None
     ) -> str:
         """提交编辑任务（异步处理，立即返回task_id）"""
         
@@ -425,14 +426,14 @@ class ImageEditService:
         task_id = IDGenerator.generate_request_id("task")
         total_images = len(images)
         
-        # 保存任务到数据库（兼容未添加openid列的表结构）
+        # 保存任务到数据库（兼容未添加ip_address列的表结构）
         async with db.get_connection() as conn:
             async with conn.cursor() as cursor:
                 await cursor.execute(
                     """INSERT INTO image_edit_tasks 
-                       (task_id, user_id, edit_type, edit_params, total_images, status) 
-                       VALUES (%s, %s, %s, %s, %s, %s)""",
-                    (task_id, user_id, edit_type, 
+                       (task_id, user_id, ip_address, edit_type, edit_params, total_images, status) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (task_id, user_id, ip_address, edit_type, 
                      json.dumps(edit_params), total_images, 'pending')
                 )
                 await conn.commit()
@@ -516,6 +517,33 @@ class ImageEditService:
             
             # 5. 最终保存结果并扣除额度
             await self._save_results(task_id, all_results, openid)
+            
+            # 6. 记录统一日志（图像编辑）
+            try:
+                # 从数据库获取任务信息
+                async with db.get_connection() as conn:
+                    async with conn.cursor(aiomysql.DictCursor) as cursor:
+                        await cursor.execute(
+                            "SELECT user_id, ip_address FROM image_edit_tasks WHERE task_id = %s",
+                            (task_id,)
+                        )
+                        task_info = await cursor.fetchone()
+                        
+                        if task_info:
+                            from app.services.stats_service import stats_service
+                            await stats_service.log_unified_request(
+                                request_id=task_id,
+                                request_type='image_edit',
+                                ip_address=task_info.get('ip_address'),
+                                client_id=task_info.get('user_id'),
+                                openid=openid,
+                                total_images=len(images),
+                                cached_count=cache_hit_count,
+                                llm_count=api_count,  # API调用数就是大模型处理数
+                                local_count=0  # 图像编辑不使用本地处理
+                            )
+            except Exception as e:
+                logger.error(f"记录图像编辑统一日志失败: {e}")
             
             logger.info(f"任务处理完成: {task_id}")
             

@@ -153,7 +153,6 @@ document.addEventListener('DOMContentLoaded', function() {
     loadTodayStats();
     loadCacheStats();
     loadCategoryDistribution();
-    loadInferenceMethodStats();
     loadBatchCacheStats();
     loadBatchClassifyStats();
     loadImageEditStats();
@@ -165,7 +164,6 @@ document.addEventListener('DOMContentLoaded', function() {
             loadTodayStats();
             loadCacheStats();
             loadCategoryDistribution();
-            loadInferenceMethodStats();
             loadBatchCacheStats();
             loadBatchClassifyStats();
             loadImageEditStats();
@@ -224,7 +222,6 @@ function showTab(tabName) {
         loadTodayStats();
         loadCacheStats();
         loadCategoryDistribution();
-        loadInferenceMethodStats();
         loadBatchCacheStats();
         loadBatchClassifyStats();
         loadImageEditStats();
@@ -347,6 +344,9 @@ async function loadTodayStats() {
         const result = await response.json();
         const data = result.data || {};
         
+        // 调试：打印接收到的数据
+        console.log('今日统计原始数据:', JSON.stringify(data, null, 2));
+        
         // 处理null值，确保显示为0而不是空
         const formatValue = (value) => {
             if (value === null || value === undefined) return 0;
@@ -363,42 +363,79 @@ async function loadTodayStats() {
             return num.toFixed(2);
         };
         
-        const formatCurrency = (value) => {
-            const num = formatNumber(value);
-            return parseFloat(num).toFixed(2);
-        };
+        // 提取数据
+        const uniqueIps = formatNumber(data.unique_ips);
+        const uniqueUsers = formatNumber(data.unique_users);
+        const classify = data.classify || {};
+        const imageEdit = data.image_edit || {};
+        
+        // 计算分类相关数据
+        const classifyTotal = formatNumber(classify.total);
+        const classifyCached = formatNumber(classify.cached);
+        const classifyLlm = formatNumber(classify.llm_inference);
+        const classifyLocal = formatNumber(classify.local_inference);
+        const classifyCacheRate = classifyTotal > 0 ? (classifyCached * 100 / classifyTotal) : 0;
+        
+        // 计算图像编辑相关数据
+        const editTotal = formatNumber(imageEdit.total);
+        const editCached = formatNumber(imageEdit.cached);
+        const editLlm = formatNumber(imageEdit.llm_processed);
+        const editCacheRate = editTotal > 0 ? (editCached * 100 / editTotal) : 0;
         
         const statsHtml = `
             <div class="stats-grid">
                 <div class="stat-card">
-                    <h3>总请求数</h3>
-                    <div class="value">${formatNumber(data.total_requests)}</div>
-                    <div class="sub">今日累计</div>
-                </div>
-                <div class="stat-card">
-                    <h3>缓存命中</h3>
-                    <div class="value">${formatNumber(data.cache_hits)}</div>
-                    <div class="sub">命中率: ${formatPercent(data.cache_hit_rate)}%</div>
+                    <h3>独立IP</h3>
+                    <div class="value">${formatNumber(uniqueIps)}</div>
+                    <div class="sub">今日独立IP数</div>
                 </div>
                 <div class="stat-card">
                     <h3>独立用户</h3>
-                    <div class="value">${formatNumber(data.unique_users)}</div>
-                    <div class="sub">独立IP: ${formatNumber(data.unique_ips)}</div>
+                    <div class="value">${formatNumber(uniqueUsers)}</div>
+                    <div class="sub">今日用户数</div>
+                </div>
+            </div>
+            
+            <h3 style="margin-top: 25px; margin-bottom: 15px; color: #333;">📸 图片分类统计</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>分类总数</h3>
+                    <div class="value">${formatNumber(classifyTotal)}</div>
+                    <div class="sub">今日分类照片数</div>
                 </div>
                 <div class="stat-card">
-                    <h3>平均耗时</h3>
-                    <div class="value">${formatNumber(data.avg_processing_time)}</div>
-                    <div class="sub">毫秒</div>
+                    <h3>缓存命中</h3>
+                    <div class="value">${formatNumber(classifyCached)}</div>
+                    <div class="sub">命中率: ${formatPercent(classifyCacheRate)}%</div>
                 </div>
                 <div class="stat-card">
-                    <h3>预估成本</h3>
-                    <div class="value">¥${formatCurrency(data.estimated_cost)}</div>
-                    <div class="sub">API调用成本</div>
+                    <h3>大模型推理</h3>
+                    <div class="value">${formatNumber(classifyLlm)}</div>
+                    <div class="sub">LLM处理数</div>
                 </div>
                 <div class="stat-card">
-                    <h3>节省成本</h3>
-                    <div class="value">¥${formatCurrency(data.cost_saved)}</div>
-                    <div class="sub">缓存节省</div>
+                    <h3>本地推理</h3>
+                    <div class="value">${formatNumber(classifyLocal)}</div>
+                    <div class="sub">本地处理数</div>
+                </div>
+            </div>
+            
+            <h3 style="margin-top: 25px; margin-bottom: 15px; color: #333;">🎨 图像编辑统计</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>编辑总数</h3>
+                    <div class="value">${formatNumber(editTotal)}</div>
+                    <div class="sub">今日编辑照片数</div>
+                </div>
+                <div class="stat-card">
+                    <h3>缓存命中</h3>
+                    <div class="value">${formatNumber(editCached)}</div>
+                    <div class="sub">命中率: ${formatPercent(editCacheRate)}%</div>
+                </div>
+                <div class="stat-card">
+                    <h3>大模型处理</h3>
+                    <div class="value">${formatNumber(editLlm)}</div>
+                    <div class="sub">LLM处理数</div>
                 </div>
             </div>
         `;
@@ -661,83 +698,6 @@ function formatNumber(num) {
     return num ? num.toLocaleString('zh-CN') : 0;
 }
 
-// 加载推理方式统计
-async function loadInferenceMethodStats() {
-    try {
-        const response = await authFetch(`${currentConfig.apiUrl}/api/v1/stats/inference-method`);
-        const data = await response.json();
-        const stats = data.data;
-        
-        const total = stats.total_requests || 0;
-        const fromCache = stats.from_cache || 0;
-        const llmSuccess = stats.llm_success || 0;
-        const localDirect = stats.local_direct || 0;
-        const localFallback = stats.local_fallback_success || 0;
-        const localTest = stats.local_test || 0;
-        const llmFail = stats.llm_fail_count || 0;
-        const localTotal = stats.local_total || 0;
-        
-        document.getElementById('inference-method-stats').innerHTML = `
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-icon">📊</div>
-                    <div class="stat-value">${formatNumber(total)}</div>
-                    <div class="stat-label">今日总请求</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">💾</div>
-                    <div class="stat-value">${formatNumber(fromCache)}</div>
-                    <div class="stat-label">缓存命中</div>
-                    <div class="stat-trend" style="color: #28a745;">${total > 0 ? ((fromCache/total*100).toFixed(1)) : 0}%</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">🌐</div>
-                    <div class="stat-value">${formatNumber(llmSuccess)}</div>
-                    <div class="stat-label">大模型调用成功</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">🤖</div>
-                    <div class="stat-value">${formatNumber(localTotal)}</div>
-                    <div class="stat-label">本地推理总次数</div>
-                    <div class="stat-trend" style="color: #667eea;">直接: ${localDirect} | 降级: ${localFallback} | 测试: ${localTest}</div>
-                </div>
-            </div>
-            
-            <div class="stats-grid" style="margin-top: 20px;">
-                <div class="stat-card" style="border-left: 4px solid #dc3545;">
-                    <div class="stat-icon">❌</div>
-                    <div class="stat-value">${formatNumber(llmFail)}</div>
-                    <div class="stat-label">大模型调用失败</div>
-                    <div class="stat-trend" style="color: #dc3545;">已降级到本地推理</div>
-                </div>
-                <div class="stat-card" style="border-left: 4px solid #28a745;">
-                    <div class="stat-icon">✅</div>
-                    <div class="stat-value">${formatNumber(localFallback)}</div>
-                    <div class="stat-label">本地推理降级成功</div>
-                    <div class="stat-trend" style="color: #28a745;">保障服务可用性</div>
-                </div>
-                <div class="stat-card" style="border-left: 4px solid #667eea;">
-                    <div class="stat-icon">⚡</div>
-                    <div class="stat-value">${formatNumber(localDirect)}</div>
-                    <div class="stat-label">本地推理直接调用</div>
-                    <div class="stat-trend" style="color: #667eea;">开关开启</div>
-                </div>
-                <div class="stat-card" style="border-left: 4px solid #17a2b8;">
-                    <div class="stat-icon">🧪</div>
-                    <div class="stat-value">${formatNumber(localTest)}</div>
-                    <div class="stat-label">本地模型测试</div>
-                    <div class="stat-trend" style="color: #17a2b8;">管理后台测试</div>
-                </div>
-            </div>
-        `;
-        
-    } catch (error) {
-        document.getElementById('inference-method-stats').innerHTML = `
-            <div class="alert alert-error">加载失败: ${error.message}</div>
-        `;
-    }
-}
-
 // 加载批量缓存查询统计
 async function loadBatchCacheStats() {
     try {
@@ -745,61 +705,33 @@ async function loadBatchCacheStats() {
         const data = await response.json();
         const stats = data.data;
         
-        const overall = stats.overall || {};
-        const totalQueries = overall.total_queries || 0;
-        const totalHashes = overall.total_hashes || 0;
-        const totalCached = overall.total_cached || 0;
-        const totalMiss = overall.total_miss || 0;
-        const avgBatchSize = overall.avg_batch_size || 0;
-        const hitRate = overall.hit_rate || 0;
+        const daily = stats.daily || [];
         
         document.getElementById('batch-cache-stats').innerHTML = `
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-icon">📦</div>
-                    <div class="stat-value">${formatNumber(totalQueries)}</div>
-                    <div class="stat-label">批量查询次数</div>
-                    <div class="stat-trend" style="color: #667eea;">最近7天</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">🔍</div>
-                    <div class="stat-value">${formatNumber(totalHashes)}</div>
-                    <div class="stat-label">查询哈希总数</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">✅</div>
-                    <div class="stat-value">${formatNumber(totalCached)}</div>
-                    <div class="stat-label">缓存命中</div>
-                    <div class="stat-trend" style="color: #28a745;">${hitRate.toFixed(1)}%</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">📊</div>
-                    <div class="stat-value">${avgBatchSize.toFixed(1)}</div>
-                    <div class="stat-label">平均批次大小</div>
-                    <div class="stat-trend" style="color: #17a2b8;">个/次</div>
-                </div>
-            </div>
-            
-            ${stats.daily && stats.daily.length > 0 ? `
-                <div style="margin-top: 20px;">
-                    <h3 style="margin-bottom: 10px;">📈 每日统计</h3>
+            ${daily.length > 0 ? `
+                <div>
+                    <h3 style="margin-bottom: 15px; color: #333;">📈 每日统计（最近7天）</h3>
                     <table style="width: 100%; border-collapse: collapse;">
                         <thead>
                             <tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">
                                 <th style="padding: 12px; text-align: left;">日期</th>
-                                <th style="padding: 12px; text-align: center;">查询次数</th>
-                                <th style="padding: 12px; text-align: center;">哈希数</th>
-                                <th style="padding: 12px; text-align: center;">命中数</th>
-                                <th style="padding: 12px; text-align: center;">命中率</th>
+                                <th style="padding: 12px; text-align: center;">请求总数</th>
+                                <th style="padding: 12px; text-align: center;">独立用户</th>
+                                <th style="padding: 12px; text-align: center;">独立IP</th>
+                                <th style="padding: 12px; text-align: center;">照片总数</th>
+                                <th style="padding: 12px; text-align: center;">缓存命中</th>
+                                <th style="padding: 12px; text-align: center;">命中比例</th>
                             </tr>
                         </thead>
                         <tbody>
-                            ${stats.daily.map((day, index) => `
+                            ${daily.map((day, index) => `
                                 <tr style="background: ${index % 2 === 0 ? '#ffffff' : '#f8f9fa'}; border-bottom: 1px solid #dee2e6;">
                                     <td style="padding: 12px;">${day.date}</td>
-                                    <td style="padding: 12px; text-align: center;">${day.queries}</td>
-                                    <td style="padding: 12px; text-align: center;">${day.hashes}</td>
-                                    <td style="padding: 12px; text-align: center;">${day.cached}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.total_requests)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.unique_users)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.unique_ips)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.total_images)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.total_cached)}</td>
                                     <td style="padding: 12px; text-align: center;">
                                         <span style="color: ${day.hit_rate >= 50 ? '#28a745' : '#ffc107'};">
                                             ${day.hit_rate.toFixed(1)}%
@@ -827,88 +759,36 @@ async function loadBatchClassifyStats() {
         const data = await response.json();
         const stats = data.data;
         
-        const overall = stats.overall || {};
-        const totalBatches = overall.total_batches || 0;
-        const totalImages = overall.total_images || 0;
-        const totalSuccess = overall.total_success || 0;
-        const totalFail = overall.total_fail || 0;
-        const avgBatchSize = overall.avg_batch_size || 0;
-        const avgTimePerImage = overall.avg_time_per_image || 0;
-        const successRate = overall.success_rate || 0;
+        const daily = stats.daily || [];
         
         document.getElementById('batch-classify-stats').innerHTML = `
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-icon">📸</div>
-                    <div class="stat-value">${formatNumber(totalBatches)}</div>
-                    <div class="stat-label">批量分类次数</div>
-                    <div class="stat-trend" style="color: #667eea;">最近7天</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">🖼️</div>
-                    <div class="stat-value">${formatNumber(totalImages)}</div>
-                    <div class="stat-label">分类图片总数</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">✅</div>
-                    <div class="stat-value">${formatNumber(totalSuccess)}</div>
-                    <div class="stat-label">成功</div>
-                    <div class="stat-trend" style="color: #28a745;">${successRate.toFixed(1)}%</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">⏱️</div>
-                    <div class="stat-value">${avgTimePerImage.toFixed(0)}</div>
-                    <div class="stat-label">平均耗时</div>
-                    <div class="stat-trend" style="color: #17a2b8;">ms/张</div>
-                </div>
-            </div>
-            
-            <div class="stats-grid" style="margin-top: 20px;">
-                <div class="stat-card" style="border-left: 4px solid #667eea;">
-                    <div class="stat-icon">📊</div>
-                    <div class="stat-value">${avgBatchSize.toFixed(1)}</div>
-                    <div class="stat-label">平均批次大小</div>
-                    <div class="stat-trend" style="color: #667eea;">张/次</div>
-                </div>
-                <div class="stat-card" style="border-left: 4px solid ${totalFail > 0 ? '#dc3545' : '#28a745'};">
-                    <div class="stat-icon">${totalFail > 0 ? '❌' : '✨'}</div>
-                    <div class="stat-value">${formatNumber(totalFail)}</div>
-                    <div class="stat-label">失败数</div>
-                    <div class="stat-trend" style="color: ${totalFail > 0 ? '#dc3545' : '#999'};">
-                        ${totalImages > 0 ? ((totalFail/totalImages*100).toFixed(1)) : 0}%
-                    </div>
-                </div>
-            </div>
-            
-            ${stats.daily && stats.daily.length > 0 ? `
-                <div style="margin-top: 20px;">
-                    <h3 style="margin-bottom: 10px;">📈 每日统计</h3>
+            ${daily.length > 0 ? `
+                <div>
+                    <h3 style="margin-bottom: 15px; color: #333;">📈 每日统计（最近7天）</h3>
                     <table style="width: 100%; border-collapse: collapse;">
                         <thead>
                             <tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">
                                 <th style="padding: 12px; text-align: left;">日期</th>
-                                <th style="padding: 12px; text-align: center;">批次</th>
-                                <th style="padding: 12px; text-align: center;">图片数</th>
-                                <th style="padding: 12px; text-align: center;">成功</th>
-                                <th style="padding: 12px; text-align: center;">失败</th>
-                                <th style="padding: 12px; text-align: center;">成功率</th>
-                                <th style="padding: 12px; text-align: center;">平均耗时</th>
+                                <th style="padding: 12px; text-align: center;">请求总数</th>
+                                <th style="padding: 12px; text-align: center;">独立用户</th>
+                                <th style="padding: 12px; text-align: center;">独立IP</th>
+                                <th style="padding: 12px; text-align: center;">照片数</th>
+                                <th style="padding: 12px; text-align: center;">缓存数</th>
+                                <th style="padding: 12px; text-align: center;">大模型推理</th>
+                                <th style="padding: 12px; text-align: center;">本地推理</th>
                             </tr>
                         </thead>
                         <tbody>
-                            ${stats.daily.map((day, index) => `
+                            ${daily.map((day, index) => `
                                 <tr style="background: ${index % 2 === 0 ? '#ffffff' : '#f8f9fa'}; border-bottom: 1px solid #dee2e6;">
                                     <td style="padding: 12px;">${day.date}</td>
-                                    <td style="padding: 12px; text-align: center;">${day.batches}</td>
-                                    <td style="padding: 12px; text-align: center;">${day.images}</td>
-                                    <td style="padding: 12px; text-align: center;">${day.success}</td>
-                                    <td style="padding: 12px; text-align: center;">${day.fail}</td>
-                                    <td style="padding: 12px; text-align: center;">
-                                        <span style="color: ${day.success_rate >= 90 ? '#28a745' : day.success_rate >= 70 ? '#ffc107' : '#dc3545'};">
-                                            ${day.success_rate.toFixed(1)}%
-                                        </span>
-                                    </td>
-                                    <td style="padding: 12px; text-align: center;">${day.avg_time.toFixed(0)}ms</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.total_requests)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.unique_users)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.unique_ips)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.images)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.cached)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.llm)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.local)}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -1416,81 +1296,34 @@ async function loadImageEditStats() {
         const data = await response.json();
         const stats = data.data;
         
-        const overall = stats.overall || {};
-        const cache = stats.cache || {};
+        const daily = stats.daily || [];
         
         document.getElementById('image-edit-stats').innerHTML = `
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-icon">🎨</div>
-                    <div class="stat-value">${formatNumber(overall.total_tasks || 0)}</div>
-                    <div class="stat-label">编辑任务总数</div>
-                    <div class="stat-trend" style="color: #667eea;">最近7天</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">🖼️</div>
-                    <div class="stat-value">${formatNumber(overall.total_images || 0)}</div>
-                    <div class="stat-label">编辑图片总数</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">✅</div>
-                    <div class="stat-value">${formatNumber(overall.completed_tasks || 0)}</div>
-                    <div class="stat-label">已完成任务</div>
-                    <div class="stat-trend" style="color: #28a745;">
-                        ${overall.total_tasks > 0 ? ((overall.completed_tasks / overall.total_tasks * 100).toFixed(1)) : 0}%
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">📊</div>
-                    <div class="stat-value">${(overall.avg_images_per_task || 0).toFixed(1)}</div>
-                    <div class="stat-label">平均图片数</div>
-                    <div class="stat-trend" style="color: #667eea;">张/任务</div>
-                </div>
-            </div>
-            
-            <div class="stats-grid" style="margin-top: 20px;">
-                <div class="stat-card" style="border-left: 4px solid #28a745;">
-                    <div class="stat-icon">🎯</div>
-                    <div class="stat-value">${formatNumber(cache.cache_hits || 0)}</div>
-                    <div class="stat-label">缓存命中</div>
-                    <div class="stat-trend" style="color: #28a745;">${(cache.hit_rate || 0).toFixed(1)}%</div>
-                </div>
-                <div class="stat-card" style="border-left: 4px solid #ffc107;">
-                    <div class="stat-icon">🔍</div>
-                    <div class="stat-value">${formatNumber(cache.cache_misses || 0)}</div>
-                    <div class="stat-label">缓存未命中</div>
-                    <div class="stat-trend" style="color: #ffc107;">
-                        ${cache.total_calls > 0 ? ((cache.cache_misses / cache.total_calls * 100).toFixed(1)) : 0}%
-                    </div>
-                </div>
-                <div class="stat-card" style="border-left: 4px solid #17a2b8;">
-                    <div class="stat-icon">📞</div>
-                    <div class="stat-value">${formatNumber(cache.total_calls || 0)}</div>
-                    <div class="stat-label">API调用总数</div>
-                </div>
-            </div>
-            
-            ${stats.daily && stats.daily.length > 0 ? `
-                <div style="margin-top: 20px;">
-                    <h3 style="margin-bottom: 10px;">📈 每日统计</h3>
+            ${daily.length > 0 ? `
+                <div>
+                    <h3 style="margin-bottom: 15px; color: #333;">📈 每日统计（最近7天）</h3>
                     <table style="width: 100%; border-collapse: collapse;">
                         <thead>
                             <tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">
                                 <th style="padding: 12px; text-align: left;">日期</th>
-                                <th style="padding: 12px; text-align: center;">任务数</th>
-                                <th style="padding: 12px; text-align: center;">图片数</th>
-                                <th style="padding: 12px; text-align: center;">已完成</th>
+                                <th style="padding: 12px; text-align: center;">请求总数</th>
+                                <th style="padding: 12px; text-align: center;">独立用户</th>
+                                <th style="padding: 12px; text-align: center;">独立IP</th>
+                                <th style="padding: 12px; text-align: center;">照片总数</th>
+                                <th style="padding: 12px; text-align: center;">缓存总数</th>
+                                <th style="padding: 12px; text-align: center;">大模型处理</th>
                             </tr>
                         </thead>
                         <tbody>
-                            ${stats.daily.map((day, index) => `
+                            ${daily.map((day, index) => `
                                 <tr style="background: ${index % 2 === 0 ? '#ffffff' : '#f8f9fa'}; border-bottom: 1px solid #dee2e6;">
                                     <td style="padding: 12px;">${day.date}</td>
-                                    <td style="padding: 12px; text-align: center;">${day.tasks}</td>
-                                    <td style="padding: 12px; text-align: center;">${day.images}</td>
-                                    <td style="padding: 12px; text-align: center;">
-                                        <span style="color: #28a745;">${day.completed}</span>
-                                    </td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.total_requests)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.unique_users)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.unique_ips)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.total_images)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.total_cached)}</td>
+                                    <td style="padding: 12px; text-align: center;">${formatNumber(day.total_llm)}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -1505,5 +1338,6 @@ async function loadImageEditStats() {
         `;
     }
 }
+
 
 

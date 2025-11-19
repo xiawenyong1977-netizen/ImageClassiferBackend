@@ -2,7 +2,7 @@
 图像编辑API路由
 """
 
-from fastapi import APIRouter, UploadFile, File, Form, Header, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, Header, HTTPException, Request
 from typing import List, Optional
 import json
 import aiomysql
@@ -22,7 +22,8 @@ async def submit_edit(
     edit_params: str = Form(...),
     client_id: Optional[str] = Form(None),
     x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
-    x_wechat_openid: Optional[str] = Header(None, alias="X-WeChat-OpenID")
+    x_wechat_openid: Optional[str] = Header(None, alias="X-WeChat-OpenID"),
+    request: Request = None
 ):
     """
     提交编辑任务（支持单张或多张）
@@ -106,12 +107,15 @@ async def submit_edit(
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="编辑参数格式错误")
         
-        # 6. 提交任务（异步处理，立即返回）
+        # 6. 获取IP地址
+        ip_address = request.client.host if request else None
+        
+        # 7. 提交任务（异步处理，立即返回）
         task_id = await image_editor.submit_task_async(
-            image_data, edit_type, params, x_user_id, openid
+            image_data, edit_type, params, x_user_id, openid, ip_address
         )
         
-        # 7. 预估时间（使用原图，约18秒/张）
+        # 8. 预估时间（使用原图，约18秒/张）
         batch_count = (len(images) + 2) // 3  # 向上取整
         estimated_time = batch_count * 54000  # 每批约54秒（3张×18秒）
         

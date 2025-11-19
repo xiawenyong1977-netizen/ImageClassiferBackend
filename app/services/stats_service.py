@@ -12,6 +12,57 @@ from app.config import settings
 class StatsService:
     """统计服务类"""
     
+    async def log_unified_request(
+        self,
+        request_id: str,
+        request_type: str,
+        ip_address: Optional[str] = None,
+        client_id: Optional[str] = None,
+        openid: Optional[str] = None,
+        total_images: int = 0,
+        cached_count: int = 0,
+        llm_count: int = 0,
+        local_count: int = 0
+    ) -> bool:
+        """
+        统一的请求日志记录函数
+        
+        Args:
+            request_id: 请求ID
+            request_type: 请求类型 (single_classify/batch_classify/batch_cache/image_edit)
+            ip_address: IP地址
+            client_id: 客户端ID（user_id）
+            openid: 微信openid
+            total_images: 照片总数
+            cached_count: 缓存命中数
+            llm_count: 大模型处理数
+            local_count: 本地处理数
+            
+        Returns:
+            是否记录成功
+        """
+        if not settings.ENABLE_REQUEST_LOG:
+            return True
+        
+        try:
+            async with db.get_cursor() as cursor:
+                sql = """
+                INSERT INTO unified_request_log (
+                    request_id, request_type, ip_address, client_id, openid,
+                    total_images, cached_count, llm_count, local_count, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                """
+                await cursor.execute(sql, (
+                    request_id, request_type, ip_address, client_id, openid,
+                    total_images, cached_count, llm_count, local_count
+                ))
+                logger.debug(f"统一请求日志已记录: {request_id} [{request_type}]")
+                return True
+                
+        except Exception as e:
+            logger.error(f"记录统一请求日志失败: {e}")
+            return False
+    
     async def log_request(
         self,
         request_id: str,
@@ -48,11 +99,13 @@ class StatsService:
         
         try:
             async with db.get_cursor() as cursor:
+                # 显式设置 created_at 确保生成列正确计算
                 sql = """
                 INSERT INTO request_log (
                     request_id, user_id, ip_address, image_hash, image_size,
-                    category, confidence, from_cache, processing_time_ms, inference_method
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    category, confidence, from_cache, processing_time_ms, inference_method,
+                    created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 """
                 await cursor.execute(sql, (
                     request_id, user_id, ip_address, image_hash, image_size,
@@ -67,34 +120,122 @@ class StatsService:
     
     async def get_today_stats(self) -> dict:
         """
-        获取今日统计
+        获取今日统计（使用统一日志表）
+        
+        统计指标：
+        1. 今日独立IP个数 - 从统一日志表统计
+        2. 今日用户数 - 从统一日志表统计（client_id 或 openid）
+        3. 今日图片分类的照片数（总数、缓存数、大模型推理数、本地推理数）
+        4. 今日图像编辑的照片数（总数、缓存数、大模型处理数）
         
         Returns:
             今日统计数据
         """
         try:
             async with db.get_cursor() as cursor:
-                sql = """
-                SELECT 
-                    COUNT(*) as total_requests,
-                    SUM(CASE WHEN from_cache = 1 THEN 1 ELSE 0 END) as cache_hits,
-                    SUM(CASE WHEN from_cache = 0 THEN 1 ELSE 0 END) as cache_misses,
-                    ROUND(SUM(CASE WHEN from_cache = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as cache_hit_rate,
-                    COUNT(DISTINCT user_id) as unique_users,
-                    COUNT(DISTINCT ip_address) as unique_ips,
-                    ROUND(AVG(processing_time_ms), 2) as avg_processing_time,
-                    SUM(CASE WHEN from_cache = 0 THEN 1 ELSE 0 END) * %s as estimated_cost,
-                    SUM(CASE WHEN from_cache = 1 THEN 1 ELSE 0 END) * %s as cost_saved
-                FROM request_log
-                WHERE created_date = CURDATE()
-                """
-                await cursor.execute(sql, (settings.COST_PER_API_CALL, settings.COST_PER_API_CALL))
+                # 使用统一日志表，一个查询搞定所有统计
+                # 独立用户统计逻辑：
+                # 1. 先从统一日志表获取所有唯一的 client_id
+                # 2. 通过 wechat_qrcode_bindings 表将 client_id 映射到 openid
+                # 3. 如果有 openid 就用 openid，没有就保留 client_id
+                # 4. 最后对这个集合去重统计
+                await cursor.execute("""
+                    SELECT 
+                        -- 独立IP个数
+                        COUNT(DISTINCT ip_address) as unique_ips,
+                        
+                        -- 用户数（基于 client_id，通过绑定表映射到 openid）
+                        COUNT(DISTINCT COALESCE(
+                            binding.openid,
+                            log.client_id
+                        )) as unique_users,
+                        
+                        -- 图片分类统计（包括单个分类、批量分类、单个缓存查询、批量缓存查询）
+                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify', 'single_cache', 'batch_cache') THEN total_images ELSE 0 END) as classify_total,
+                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify', 'single_cache', 'batch_cache') THEN cached_count ELSE 0 END) as classify_cached,
+                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify') THEN llm_count ELSE 0 END) as classify_llm,
+                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify') THEN local_count ELSE 0 END) as classify_local,
+                        
+                        -- 图像编辑统计
+                        SUM(CASE WHEN request_type = 'image_edit' THEN total_images ELSE 0 END) as edit_total,
+                        SUM(CASE WHEN request_type = 'image_edit' THEN cached_count ELSE 0 END) as edit_cached,
+                        SUM(CASE WHEN request_type = 'image_edit' THEN llm_count ELSE 0 END) as edit_llm
+                    FROM unified_request_log log
+                    LEFT JOIN (
+                        -- 获取每个 client_id 对应的 openid（如果有）
+                        -- 由于 wechat_qrcode_bindings 表有 UNIQUE KEY uk_client_id，每个 client_id 只有一条记录
+                        SELECT client_id, openid
+                        FROM wechat_qrcode_bindings
+                        WHERE openid IS NOT NULL
+                    ) binding ON log.client_id = binding.client_id
+                    WHERE log.created_date = CURDATE()
+                """)
                 result = await cursor.fetchone()
-                return result or {}
+                
+                if result:
+                    # 确保所有值都转换为正确的数字类型（处理 decimal.Decimal）
+                    def to_int(value):
+                        """转换为整数，处理 None 和 decimal.Decimal"""
+                        if value is None:
+                            return 0
+                        try:
+                            return int(float(value))
+                        except (ValueError, TypeError):
+                            return 0
+                    
+                    stats = {
+                        'unique_ips': to_int(result.get('unique_ips')),
+                        'unique_users': to_int(result.get('unique_users')),
+                        'classify': {
+                            'total': to_int(result.get('classify_total')),
+                            'cached': to_int(result.get('classify_cached')),
+                            'llm_inference': to_int(result.get('classify_llm')),
+                            'local_inference': to_int(result.get('classify_local'))
+                        },
+                        'image_edit': {
+                            'total': to_int(result.get('edit_total')),
+                            'cached': to_int(result.get('edit_cached')),
+                            'llm_processed': to_int(result.get('edit_llm'))
+                        }
+                    }
+                    
+                    logger.debug(f"今日统计查询结果: {stats}")
+                    return stats
+                
+                # 如果没有数据，返回默认值
+                return {
+                    'unique_ips': 0,
+                    'unique_users': 0,
+                    'classify': {
+                        'total': 0,
+                        'cached': 0,
+                        'llm_inference': 0,
+                        'local_inference': 0
+                    },
+                    'image_edit': {
+                        'total': 0,
+                        'cached': 0,
+                        'llm_processed': 0
+                    }
+                }
                 
         except Exception as e:
-            logger.error(f"查询今日统计失败: {e}")
-            return {}
+            logger.error(f"查询今日统计失败: {e}", exc_info=True)
+            return {
+                'unique_ips': 0,
+                'unique_users': 0,
+                'classify': {
+                    'total': 0,
+                    'cached': 0,
+                    'llm_inference': 0,
+                    'local_inference': 0
+                },
+                'image_edit': {
+                    'total': 0,
+                    'cached': 0,
+                    'llm_processed': 0
+                }
+            }
     
     async def get_cache_efficiency(self) -> dict:
         """
@@ -108,16 +249,57 @@ class StatsService:
                 sql = """
                 SELECT 
                     COUNT(*) as total_cached_images,
-                    SUM(hit_count) as total_hits,
-                    SUM(hit_count - 1) as times_saved,
-                    ROUND((SUM(hit_count - 1) * %s), 2) as cost_saved,
-                    ROUND(AVG(hit_count), 2) as avg_hit_per_image,
-                    MAX(hit_count) as max_hits
+                    COALESCE(SUM(hit_count), 0) as total_hits,
+                    COALESCE(SUM(hit_count - 1), 0) as times_saved,
+                    ROUND((COALESCE(SUM(hit_count - 1), 0) * %s), 2) as cost_saved,
+                    COALESCE(ROUND(AVG(hit_count), 2), 0) as avg_hit_per_image,
+                    COALESCE(MAX(hit_count), 0) as max_hits
                 FROM image_classification_cache
                 """
                 await cursor.execute(sql, (settings.COST_PER_API_CALL,))
                 result = await cursor.fetchone()
-                return result or {}
+                
+                # 调试：记录原始查询结果
+                logger.debug(f"缓存效率查询原始结果: {result}")
+                
+                # 确保所有值都转换为正确的数字类型（处理 decimal.Decimal）
+                def to_int(value):
+                    """转换为整数，处理 None 和 decimal.Decimal"""
+                    if value is None:
+                        return 0
+                    try:
+                        return int(float(value))
+                    except (ValueError, TypeError):
+                        return 0
+                
+                def to_float(value):
+                    """转换为浮点数，处理 None 和 decimal.Decimal"""
+                    if value is None:
+                        return 0.0
+                    try:
+                        return float(value)
+                    except (ValueError, TypeError):
+                        return 0.0
+                
+                if result:
+                    stats = {
+                        'total_cached_images': to_int(result.get('total_cached_images')),
+                        'total_hits': to_int(result.get('total_hits')),
+                        'times_saved': to_int(result.get('times_saved')),
+                        'cost_saved': to_float(result.get('cost_saved')),
+                        'avg_hit_per_image': to_float(result.get('avg_hit_per_image')),
+                        'max_hits': to_int(result.get('max_hits'))
+                    }
+                    logger.debug(f"缓存效率统计结果: {stats}")
+                    return stats
+                return {
+                    'total_cached_images': 0,
+                    'total_hits': 0,
+                    'times_saved': 0,
+                    'cost_saved': 0.0,
+                    'avg_hit_per_image': 0.0,
+                    'max_hits': 0
+                }
                 
         except Exception as e:
             logger.error(f"查询缓存效率失败: {e}")
@@ -125,30 +307,61 @@ class StatsService:
     
     async def get_category_distribution(self) -> list:
         """
-        获取分类分布统计
+        获取分类分布统计（从缓存表统计，包含所有分类结果）
         
         Returns:
             分类分布列表
         """
         try:
             async with db.get_cursor() as cursor:
+                # 从 image_classification_cache 表统计，因为那里有完整的分类数据
+                # 统计今日新增的缓存记录（通过 created_at 判断）
                 sql = """
                 SELECT 
                     category,
                     COUNT(*) as count,
                     ROUND(AVG(confidence), 4) as avg_confidence,
-                    ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM request_log WHERE created_date = CURDATE()), 2) as percentage
-                FROM request_log
-                WHERE created_date = CURDATE()
+                    ROUND(COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM image_classification_cache WHERE DATE(created_at) = CURDATE()), 0), 2) as percentage
+                FROM image_classification_cache
+                WHERE DATE(created_at) = CURDATE()
                 GROUP BY category
                 ORDER BY count DESC
                 """
                 await cursor.execute(sql)
                 results = await cursor.fetchall()
-                return results or []
+                
+                # 确保所有值都转换为正确的数字类型
+                def to_int(value):
+                    if value is None:
+                        return 0
+                    try:
+                        return int(float(value))
+                    except (ValueError, TypeError):
+                        return 0
+                
+                def to_float(value):
+                    if value is None:
+                        return 0.0
+                    try:
+                        return float(value)
+                    except (ValueError, TypeError):
+                        return 0.0
+                
+                # 转换结果
+                formatted_results = []
+                for row in results:
+                    formatted_results.append({
+                        'category': row.get('category', ''),
+                        'count': to_int(row.get('count')),
+                        'avg_confidence': to_float(row.get('avg_confidence')),
+                        'percentage': to_float(row.get('percentage'))
+                    })
+                
+                logger.debug(f"分类分布统计结果: {formatted_results}")
+                return formatted_results
                 
         except Exception as e:
-            logger.error(f"查询分类分布失败: {e}")
+            logger.error(f"查询分类分布失败: {e}", exc_info=True)
             return []
     
     async def get_inference_method_stats(self) -> dict:
@@ -235,80 +448,89 @@ class StatsService:
     
     async def get_batch_cache_stats(self, days: int = 7) -> dict:
         """
-        获取批量缓存查询统计
+        获取批量缓存查询统计（从统一日志表统计，简化版）
         
         Args:
             days: 查询最近几天的数据
             
         Returns:
-            统计数据
+            统计数据（每日统计）
         """
         try:
             async with db.get_cursor() as cursor:
-                # 总体统计
-                await cursor.execute("""
-                    SELECT 
-                        COUNT(*) as total_queries,
-                        SUM(total_count) as total_hashes,
-                        SUM(cached_count) as total_cached,
-                        SUM(miss_count) as total_miss,
-                        ROUND(AVG(total_count), 2) as avg_batch_size,
-                        ROUND(SUM(cached_count) * 100.0 / NULLIF(SUM(total_count), 0), 2) as hit_rate
-                    FROM batch_cache_stats
-                    WHERE created_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
-                """, (days,))
+                # 类型转换函数
+                def to_int(value):
+                    if value is None:
+                        return 0
+                    try:
+                        return int(float(value))
+                    except (ValueError, TypeError):
+                        return 0
                 
-                overall = await cursor.fetchone()
+                def to_float(value):
+                    if value is None:
+                        return 0.0
+                    try:
+                        return float(value)
+                    except (ValueError, TypeError):
+                        return 0.0
                 
-                # 每日统计
+                # 每日统计（从 unified_request_log 表，筛选 batch_cache 类型）
+                # 统计指标：独立用户数、独立IP数、请求总数、照片总数、缓存命中总数、命中比例
                 await cursor.execute("""
                     SELECT 
                         created_date,
-                        COUNT(*) as queries,
-                        SUM(total_count) as hashes,
-                        SUM(cached_count) as cached,
-                        SUM(miss_count) as miss,
-                        ROUND(SUM(cached_count) * 100.0 / NULLIF(SUM(total_count), 0), 2) as hit_rate
-                    FROM batch_cache_stats
-                    WHERE created_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+                        -- 请求总数（批量缓存查询请求次数）
+                        COUNT(*) as total_requests,
+                        -- 独立用户数（基于 client_id，通过绑定表映射到 openid）
+                        COUNT(DISTINCT COALESCE(
+                            binding.openid,
+                            log.client_id
+                        )) as unique_users,
+                        -- 独立IP数
+                        COUNT(DISTINCT ip_address) as unique_ips,
+                        -- 照片总数
+                        SUM(total_images) as total_images,
+                        -- 缓存命中总数
+                        SUM(cached_count) as total_cached,
+                        -- 命中比例
+                        ROUND(SUM(cached_count) * 100.0 / NULLIF(SUM(total_images), 0), 2) as hit_rate
+                    FROM unified_request_log log
+                    LEFT JOIN (
+                        -- 获取每个 client_id 对应的 openid（如果有）
+                        SELECT client_id, openid
+                        FROM wechat_qrcode_bindings
+                        WHERE openid IS NOT NULL
+                    ) binding ON log.client_id = binding.client_id
+                    WHERE log.request_type = 'batch_cache'
+                      AND log.created_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
                     GROUP BY created_date
                     ORDER BY created_date DESC
                 """, (days,))
                 
                 daily = await cursor.fetchall()
                 
+                # 转换结果
+                daily_stats = []
+                for row in daily:
+                    daily_stats.append({
+                        "date": str(row['created_date']),
+                        "total_requests": to_int(row.get('total_requests')),
+                        "unique_users": to_int(row.get('unique_users')),
+                        "unique_ips": to_int(row.get('unique_ips')),
+                        "total_images": to_int(row.get('total_images')),
+                        "total_cached": to_int(row.get('total_cached')),
+                        "hit_rate": to_float(row.get('hit_rate'))
+                    })
+                
+                logger.debug(f"批量缓存查询统计结果: daily_count={len(daily_stats)}")
+                
                 return {
-                    "overall": {
-                        "total_queries": overall['total_queries'] or 0,
-                        "total_hashes": overall['total_hashes'] or 0,
-                        "total_cached": overall['total_cached'] or 0,
-                        "total_miss": overall['total_miss'] or 0,
-                        "avg_batch_size": float(overall['avg_batch_size'] or 0),
-                        "hit_rate": float(overall['hit_rate'] or 0)
-                    },
-                    "daily": [
-                        {
-                            "date": str(row['created_date']),
-                            "queries": row['queries'],
-                            "hashes": row['hashes'],
-                            "cached": row['cached'],
-                            "miss": row['miss'],
-                            "hit_rate": float(row['hit_rate'] or 0)
-                        }
-                        for row in daily
-                    ]
+                    "daily": daily_stats
                 }
         except Exception as e:
-            logger.error(f"获取批量缓存统计失败: {e}")
+            logger.error(f"获取批量缓存统计失败: {e}", exc_info=True)
             return {
-                "overall": {
-                    "total_queries": 0,
-                    "total_hashes": 0,
-                    "total_cached": 0,
-                    "total_miss": 0,
-                    "avg_batch_size": 0,
-                    "hit_rate": 0
-                },
                 "daily": []
             }
     
@@ -352,188 +574,164 @@ class StatsService:
     
     async def get_batch_classify_stats(self, days: int = 7) -> dict:
         """
-        获取批量分类统计
+        获取批量分类统计（从统一日志表统计，简化版）
         
         Args:
             days: 查询最近几天的数据
             
         Returns:
-            统计数据
+            统计数据（每日统计）
         """
         try:
             async with db.get_cursor() as cursor:
-                # 总体统计
-                await cursor.execute("""
-                    SELECT 
-                        COUNT(*) as total_batches,
-                        SUM(total_count) as total_images,
-                        SUM(success_count) as total_success,
-                        SUM(fail_count) as total_fail,
-                        ROUND(AVG(total_count), 2) as avg_batch_size,
-                        ROUND(AVG(avg_processing_time_ms), 2) as avg_time_per_image,
-                        ROUND(SUM(success_count) * 100.0 / NULLIF(SUM(total_count), 0), 2) as success_rate
-                    FROM batch_classify_stats
-                    WHERE created_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
-                """, (days,))
+                # 类型转换函数
+                def to_int(value):
+                    if value is None:
+                        return 0
+                    try:
+                        return int(float(value))
+                    except (ValueError, TypeError):
+                        return 0
                 
-                overall = await cursor.fetchone()
-                
-                # 每日统计
+                # 每日统计（从 unified_request_log 表，筛选 batch_classify 类型）
+                # 统计指标：请求总数、独立用户数、独立IP数、照片数、缓存数、大模型推理数、本地推理数
                 await cursor.execute("""
                     SELECT 
                         created_date,
-                        COUNT(*) as batches,
-                        SUM(total_count) as images,
-                        SUM(success_count) as success,
-                        SUM(fail_count) as fail,
-                        ROUND(AVG(avg_processing_time_ms), 2) as avg_time,
-                        ROUND(SUM(success_count) * 100.0 / NULLIF(SUM(total_count), 0), 2) as success_rate
-                    FROM batch_classify_stats
-                    WHERE created_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+                        -- 请求总数（批量分类请求次数）
+                        COUNT(*) as total_requests,
+                        -- 独立用户数（基于 client_id，通过绑定表映射到 openid）
+                        COUNT(DISTINCT COALESCE(
+                            binding.openid,
+                            log.client_id
+                        )) as unique_users,
+                        -- 独立IP数
+                        COUNT(DISTINCT ip_address) as unique_ips,
+                        -- 照片数
+                        SUM(total_images) as images,
+                        -- 缓存数
+                        SUM(cached_count) as cached,
+                        -- 大模型推理数
+                        SUM(llm_count) as llm,
+                        -- 本地推理数
+                        SUM(local_count) as local
+                    FROM unified_request_log log
+                    LEFT JOIN (
+                        -- 获取每个 client_id 对应的 openid（如果有）
+                        SELECT client_id, openid
+                        FROM wechat_qrcode_bindings
+                        WHERE openid IS NOT NULL
+                    ) binding ON log.client_id = binding.client_id
+                    WHERE log.request_type = 'batch_classify'
+                      AND log.created_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
                     GROUP BY created_date
                     ORDER BY created_date DESC
                 """, (days,))
                 
                 daily = await cursor.fetchall()
                 
+                # 转换结果
+                daily_stats = []
+                for row in daily:
+                    daily_stats.append({
+                        "date": str(row['created_date']),
+                        "total_requests": to_int(row.get('total_requests')),
+                        "unique_users": to_int(row.get('unique_users')),
+                        "unique_ips": to_int(row.get('unique_ips')),
+                        "images": to_int(row.get('images')),
+                        "cached": to_int(row.get('cached')),
+                        "llm": to_int(row.get('llm')),
+                        "local": to_int(row.get('local'))
+                    })
+                
+                logger.debug(f"批量分类统计结果: daily_count={len(daily_stats)}")
+                
                 return {
-                    "overall": {
-                        "total_batches": overall['total_batches'] or 0,
-                        "total_images": overall['total_images'] or 0,
-                        "total_success": overall['total_success'] or 0,
-                        "total_fail": overall['total_fail'] or 0,
-                        "avg_batch_size": float(overall['avg_batch_size'] or 0),
-                        "avg_time_per_image": float(overall['avg_time_per_image'] or 0),
-                        "success_rate": float(overall['success_rate'] or 0)
-                    },
-                    "daily": [
-                        {
-                            "date": str(row['created_date']),
-                            "batches": row['batches'],
-                            "images": row['images'],
-                            "success": row['success'],
-                            "fail": row['fail'],
-                            "avg_time": float(row['avg_time'] or 0),
-                            "success_rate": float(row['success_rate'] or 0)
-                        }
-                        for row in daily
-                    ]
+                    "daily": daily_stats
                 }
         except Exception as e:
-            logger.error(f"获取批量分类统计失败: {e}")
+            logger.error(f"获取批量分类统计失败: {e}", exc_info=True)
             return {
-                "overall": {
-                    "total_batches": 0,
-                    "total_images": 0,
-                    "total_success": 0,
-                    "total_fail": 0,
-                    "avg_batch_size": 0,
-                    "avg_time_per_image": 0,
-                    "success_rate": 0
-                },
                 "daily": []
             }
     
     async def get_image_edit_stats(self, days: int = 7) -> dict:
         """
-        获取图片编辑统计
+        获取图片编辑统计（从统一日志表统计，简化版）
         
         Args:
             days: 查询最近几天的数据
             
         Returns:
-            统计数据
+            统计数据（每日统计）
         """
         try:
             async with db.get_cursor() as cursor:
-                # 总体统计
+                # 类型转换函数
+                def to_int(value):
+                    if value is None:
+                        return 0
+                    try:
+                        return int(float(value))
+                    except (ValueError, TypeError):
+                        return 0
+                
+                # 每日统计（从 unified_request_log 表，筛选 image_edit 类型）
+                # 统计指标：独立IP数、独立用户数、请求总数、照片总数、缓存总数、大模型处理总数
                 await cursor.execute("""
                     SELECT 
-                        COUNT(*) as total_tasks,
+                        created_date,
+                        -- 请求总数（图像编辑请求次数）
+                        COUNT(*) as total_requests,
+                        -- 独立用户数（基于 client_id，通过绑定表映射到 openid）
+                        COUNT(DISTINCT COALESCE(
+                            binding.openid,
+                            log.client_id
+                        )) as unique_users,
+                        -- 独立IP数
+                        COUNT(DISTINCT ip_address) as unique_ips,
+                        -- 照片总数
                         SUM(total_images) as total_images,
-                        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_tasks,
-                        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_tasks,
-                        SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing_tasks,
-                        ROUND(AVG(total_images), 2) as avg_images_per_task
-                    FROM image_edit_tasks
-                    WHERE DATE(created_at) >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
-                """, (days,))
-                
-                overall = await cursor.fetchone()
-                
-                # 缓存统计（从image_edit_cache表统计）
-                await cursor.execute("""
-                    SELECT 
-                        SUM(hit_count) as total_api_calls,
-                        SUM(hit_count - 1) as cache_hits,
-                        COUNT(*) as cache_misses
-                    FROM image_edit_cache
-                    WHERE DATE(created_at) >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
-                """, (days,))
-                
-                cache_stats = await cursor.fetchone()
-                
-                # 每日统计
-                await cursor.execute("""
-                    SELECT 
-                        DATE(created_at) as created_date,
-                        COUNT(*) as tasks,
-                        SUM(total_images) as images,
-                        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
-                    FROM image_edit_tasks
-                    WHERE DATE(created_at) >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
-                    GROUP BY DATE(created_at)
+                        -- 缓存总数
+                        SUM(cached_count) as total_cached,
+                        -- 大模型处理总数
+                        SUM(llm_count) as total_llm
+                    FROM unified_request_log log
+                    LEFT JOIN (
+                        -- 获取每个 client_id 对应的 openid（如果有）
+                        SELECT client_id, openid
+                        FROM wechat_qrcode_bindings
+                        WHERE openid IS NOT NULL
+                    ) binding ON log.client_id = binding.client_id
+                    WHERE log.request_type = 'image_edit'
+                      AND log.created_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
+                    GROUP BY created_date
                     ORDER BY created_date DESC
                 """, (days,))
                 
                 daily = await cursor.fetchall()
                 
-                total_api_calls = cache_stats['total_api_calls'] or 0
-                cache_hits = cache_stats['cache_hits'] or 0
-                cache_misses = cache_stats['cache_misses'] or 0
+                # 转换结果
+                daily_stats = []
+                for row in daily:
+                    daily_stats.append({
+                        "date": str(row['created_date']),
+                        "total_requests": to_int(row.get('total_requests')),
+                        "unique_users": to_int(row.get('unique_users')),
+                        "unique_ips": to_int(row.get('unique_ips')),
+                        "total_images": to_int(row.get('total_images')),
+                        "total_cached": to_int(row.get('total_cached')),
+                        "total_llm": to_int(row.get('total_llm'))
+                    })
+                
+                logger.debug(f"图像编辑统计结果: daily_count={len(daily_stats)}")
                 
                 return {
-                    "overall": {
-                        "total_tasks": overall['total_tasks'] or 0,
-                        "total_images": overall['total_images'] or 0,
-                        "completed_tasks": overall['completed_tasks'] or 0,
-                        "failed_tasks": overall['failed_tasks'] or 0,
-                        "processing_tasks": overall['processing_tasks'] or 0,
-                        "avg_images_per_task": float(overall['avg_images_per_task'] or 0)
-                    },
-                    "cache": {
-                        "total_calls": total_api_calls,
-                        "cache_hits": cache_hits,
-                        "cache_misses": cache_misses,
-                        "hit_rate": float((cache_hits * 100.0 / total_api_calls) if total_api_calls > 0 else 0)
-                    },
-                    "daily": [
-                        {
-                            "date": str(row['created_date']),
-                            "tasks": row['tasks'],
-                            "images": row['images'],
-                            "completed": row['completed']
-                        }
-                        for row in daily
-                    ]
+                    "daily": daily_stats
                 }
         except Exception as e:
-            logger.error(f"获取图片编辑统计失败: {e}")
+            logger.error(f"获取图片编辑统计失败: {e}", exc_info=True)
             return {
-                "overall": {
-                    "total_tasks": 0,
-                    "total_images": 0,
-                    "completed_tasks": 0,
-                    "failed_tasks": 0,
-                    "processing_tasks": 0,
-                    "avg_images_per_task": 0
-                },
-                "cache": {
-                    "total_calls": 0,
-                    "cache_hits": 0,
-                    "cache_misses": 0,
-                    "hit_rate": 0
-                },
                 "daily": []
             }
     

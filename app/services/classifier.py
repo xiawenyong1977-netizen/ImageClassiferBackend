@@ -163,7 +163,7 @@ class ClassifierService:
         image_hash: Optional[str] = None,
         user_id: Optional[str] = None,
         ip_address: Optional[str] = None
-    ) -> Tuple[dict, bool, str, int]:
+    ) -> Tuple[dict, bool, str, int, str]:
         """
         完整的图片分类流程
         
@@ -174,7 +174,7 @@ class ClassifierService:
             ip_address: IP地址
             
         Returns:
-            (分类结果, 是否来自缓存, 请求ID, 处理耗时)
+            (分类结果, 是否来自缓存, 请求ID, 处理耗时, 推理方式)
         """
         request_id = IDGenerator.generate_request_id()
         start_time = time.time()
@@ -216,7 +216,7 @@ class ClassifierService:
             }
             
             logger.info(f"缓存命中 [{request_id}]: {result['category']} ({processing_time}ms)")
-            return result, True, request_id, processing_time
+            return result, True, request_id, processing_time, "cache"
         
         # 缓存未命中，根据配置选择推理方式
         model_result = None
@@ -324,7 +324,7 @@ class ClassifierService:
         )
         
         logger.info(f"分类完成 [{request_id}]: {model_result['category']} ({processing_time}ms) [方式: {inference_method}]")
-        return model_result, False, request_id, processing_time
+        return model_result, False, request_id, processing_time, inference_method
 
 
 # 全局分类服务实例

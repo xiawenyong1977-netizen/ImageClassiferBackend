@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # ===== 图片配置 =====
     MAX_IMAGE_SIZE_MB: int = Field(default=10, description="最大图片大小(MB)")
     ALLOWED_IMAGE_FORMATS: str = Field(
-        default="jpg,jpeg,png,webp,gif",
+        default="jpg,jpeg,png,webp,gif,mpo",
         description="允许的图片格式"
     )
     

@@ -67,8 +67,8 @@ class CacheService:
             async with db.get_cursor() as cursor:
                 sql = """
                 INSERT INTO image_classification_cache 
-                (image_hash, category, confidence, description, model_used)
-                VALUES (%s, %s, %s, %s, %s)
+                (image_hash, category, confidence, description, model_used, hit_count)
+                VALUES (%s, %s, %s, %s, %s, 1)
                 """
                 await cursor.execute(sql, (
                     image_hash, category, confidence, description, model_used

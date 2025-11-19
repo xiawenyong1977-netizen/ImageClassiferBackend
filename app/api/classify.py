@@ -54,6 +54,21 @@ async def check_cache(
             ip_address=ip_address
         )
         
+        # 记录统一日志（单个缓存查询）
+        from app.services.stats_service import stats_service
+        cached_count = 1 if from_cache else 0
+        await stats_service.log_unified_request(
+            request_id=request_id,
+            request_type='single_cache',  # 单个缓存查询
+            ip_address=ip_address,
+            client_id=user_id,
+            openid=None,
+            total_images=1,
+            cached_count=cached_count,
+            llm_count=0,
+            local_count=0
+        )
+        
         if result:
             # 缓存命中
             return CheckCacheResponse(
@@ -110,8 +125,21 @@ async def batch_check_cache(
         cached_count = sum(1 for item in results if item['cached'])
         miss_count = len(results) - cached_count
         
-        # 记录批量缓存查询统计
+        # 记录统一日志（批量缓存查询）
         from app.services.stats_service import stats_service
+        await stats_service.log_unified_request(
+            request_id=request_id,
+            request_type='batch_cache',
+            ip_address=ip_address,
+            client_id=user_id,
+            openid=None,
+            total_images=len(results),
+            cached_count=cached_count,
+            llm_count=0,
+            local_count=0
+        )
+        
+        # 保留旧的批量缓存查询统计（兼容性）
         await stats_service.log_batch_cache_query(
             request_id=request_id,
             user_id=user_id,
@@ -172,11 +200,29 @@ async def classify_image(
         ip_address = request.client.host if request else None
         
         # 分类
-        result, from_cache, request_id, processing_time = await classifier.classify_image(
+        result, from_cache, request_id, processing_time, inference_method = await classifier.classify_image(
             image_bytes=image_bytes,
             image_hash=image_hash,
             user_id=user_id,
             ip_address=ip_address
+        )
+        
+        # 记录统一日志（单个分类请求）
+        from app.services.stats_service import stats_service
+        cached_count = 1 if from_cache else 0
+        llm_count = 1 if not from_cache and inference_method in ('llm', 'llm_fallback') else 0
+        local_count = 1 if not from_cache and inference_method in ('local', 'local_fallback', 'local_test') else 0
+        
+        await stats_service.log_unified_request(
+            request_id=request_id,
+            request_type='single_classify',
+            ip_address=ip_address,
+            client_id=user_id,
+            openid=None,
+            total_images=1,
+            cached_count=cached_count,
+            llm_count=llm_count,
+            local_count=local_count
         )
         
         return ClassificationResponse(
@@ -242,6 +288,9 @@ async def batch_classify(
         results = []
         success_count = 0
         fail_count = 0
+        cached_count = 0
+        llm_count = 0
+        local_count = 0
         
         for index, image in enumerate(images):
             item_start_time = time.time()
@@ -259,12 +308,20 @@ async def batch_classify(
                 image_hash = hashes_list[index] if index < len(hashes_list) else None
                 
                 # 调用分类服务
-                result, from_cache, request_id, processing_time = await classifier.classify_image(
+                result, from_cache, request_id, processing_time, inference_method = await classifier.classify_image(
                     image_bytes=image_bytes,
                     image_hash=image_hash,
                     user_id=user_id,
                     ip_address=ip_address
                 )
+                
+                # 统计处理方式
+                if from_cache:
+                    cached_count += 1
+                elif inference_method in ('llm', 'llm_fallback'):
+                    llm_count += 1
+                elif inference_method in ('local', 'local_fallback', 'local_test'):
+                    local_count += 1
                 
                 item_processing_time = int((time.time() - item_start_time) * 1000)
                 
@@ -299,8 +356,21 @@ async def batch_classify(
         # 计算总耗时
         total_processing_time = int((time.time() - batch_start_time) * 1000)
         
-        # 记录批量分类统计
+        # 记录统一日志（批量分类）
         from app.services.stats_service import stats_service
+        await stats_service.log_unified_request(
+            request_id=batch_request_id,
+            request_type='batch_classify',
+            ip_address=ip_address,
+            client_id=user_id,
+            openid=None,
+            total_images=len(images),
+            cached_count=cached_count,
+            llm_count=llm_count,
+            local_count=local_count
+        )
+        
+        # 保留旧的批量分类统计（兼容性）
         await stats_service.log_batch_classify(
             request_id=batch_request_id,
             user_id=user_id,
