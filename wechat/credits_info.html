@@ -146,35 +146,6 @@
             margin-bottom: 20px;
         }
 
-        .debug-info {
-            background: #f0f0f0;
-            color: #333;
-            padding: 15px;
-            border-radius: 10px;
-            margin-top: 20px;
-            font-size: 12px;
-            max-height: 200px;
-            overflow-y: auto;
-            display: none;
-        }
-
-        .debug-info.show {
-            display: block;
-        }
-
-        .debug-toggle {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            background: rgba(0,0,0,0.7);
-            color: white;
-            padding: 8px 15px;
-            border-radius: 5px;
-            font-size: 12px;
-            z-index: 9999;
-            cursor: pointer;
-        }
-
         .history-card {
             background: white;
             border-radius: 20px;
@@ -238,7 +209,6 @@
     </style>
 </head>
 <body>
-    <div class="debug-toggle" onclick="toggleDebug()">调试信息</div>
     <div class="container">
         <div class="header">
             <h1 id="pageTitle">我的额度</h1>
@@ -262,52 +232,26 @@
                 <p>加载中...</p>
             </div>
         </div>
-
-        <div class="debug-info" id="debugInfo">
-            <div><strong>调试信息：</strong></div>
-            <div id="debugInfoContent"></div>
-        </div>
     </div>
 
     <script>
         const API_BASE_URL = 'https://www.xintuxiangce.top/api/v1';
         let openid = null;
 
-        // 调试信息显示
-        const debugLogs = [];
-        function addDebugLog(message) {
-            const time = new Date().toLocaleTimeString();
-            debugLogs.push(`${time} - ${message}`);
-            console.log(`[DEBUG ${time}] ${message}`);
-        }
-
-        function toggleDebug() {
-            const debugInfo = document.getElementById('debugInfo');
-            const content = document.getElementById('debugInfoContent');
-            content.innerHTML = debugLogs.join('<br>');
-            debugInfo.classList.toggle('show');
-        }
-
         // 检查URL参数：优先使用openid参数，其次使用code参数
         const urlParams = new URLSearchParams(window.location.search);
         const urlOpenId = urlParams.get('openid');
         const code = urlParams.get('code');
         
-        addDebugLog('当前URL: ' + window.location.href);
-        addDebugLog('openid参数: ' + (urlOpenId || '无'));
-        addDebugLog('code参数: ' + (code || '无'));
-        
         if (urlOpenId) {
             // 直接从参数获取openid（从member页面跳转过来）
             openid = urlOpenId;
-            addDebugLog('从参数获取openid: ' + openid.substring(0, 16) + '...');
             // 清除URL中的openid参数
             window.history.replaceState({}, document.title, window.location.pathname);
             // 加载额度信息
             loadCredits();
         } else if (code) {
             // 通过code获取openid
-            addDebugLog('开始通过code获取openid...');
             document.getElementById('statsCard').innerHTML = `
                 <div class="loading">
                     <div class="spinner"></div>
@@ -316,21 +260,15 @@
             `;
             
             fetch(`${API_BASE_URL}/auth/wechat?code=${code}`)
-                .then(res => {
-                    addDebugLog('授权接口响应状态: ' + res.status);
-                    return res.json();
-                })
+                .then(res => res.json())
                 .then(data => {
-                    addDebugLog('授权响应: ' + JSON.stringify(data));
                     if (data.success && data.openid) {
                         openid = data.openid;
-                        addDebugLog('成功获取openid: ' + openid.substring(0, 16) + '...');
                         // 清除URL中的code参数
                         window.history.replaceState({}, document.title, window.location.pathname);
                         // 加载额度信息
                         loadCredits();
                     } else {
-                        addDebugLog('授权失败: ' + JSON.stringify(data));
                         document.getElementById('statsCard').innerHTML = `
                             <div class="error">
                                 <p>获取用户信息失败：${data.detail || '未知错误'}</p>
@@ -339,7 +277,6 @@
                     }
                 })
                 .catch(err => {
-                    addDebugLog('获取openid异常: ' + err.message);
                     document.getElementById('statsCard').innerHTML = `
                         <div class="error">
                             <p>网络错误：${err.message}</p>
@@ -348,7 +285,6 @@
                 });
         } else {
             // 既没有openid参数也没有code参数
-            addDebugLog('缺少openid或code参数');
             document.getElementById('statsCard').innerHTML = `
                 <div class="error">
                     <p>未获取到授权信息，请通过公众号菜单重新进入</p>
@@ -359,12 +295,10 @@
         // 加载额度信息
         async function loadCredits() {
             if (!openid) {
-                addDebugLog('没有openid，无法加载额度');
                 return;
             }
 
             const statsCard = document.getElementById('statsCard');
-            addDebugLog('开始加载额度信息，openid: ' + openid.substring(0, 16) + '...');
 
             try {
                 // 添加时间戳防止缓存
@@ -377,11 +311,8 @@
                     },
                     cache: 'no-store'
                 });
-                
-                addDebugLog('获取额度响应状态: ' + response.status);
 
                 const result = await response.json();
-                addDebugLog('获取额度响应: ' + JSON.stringify(result));
 
                 if (result.success) {
                     const data = result.data || result;
@@ -411,12 +342,9 @@
                         <button class="btn btn-primary" style="width: 100%;" onclick="window.location.href='credits.html?openid=' + '${openid}'">购买额度</button>
                     `;
                     
-                    addDebugLog('额度信息加载成功');
-                    
                     // 显示消费记录
                     loadCreditsUsage();
                 } else {
-                    addDebugLog('获取额度失败: ' + JSON.stringify(result));
                     statsCard.innerHTML = `
                         <div class="error">
                             <p>获取额度信息失败：${result.detail || '未知错误'}</p>
@@ -424,7 +352,6 @@
                     `;
                 }
             } catch (error) {
-                addDebugLog('加载额度异常: ' + error.message);
                 statsCard.innerHTML = `
                     <div class="error">
                         <p>网络错误：${error.message}</p>
@@ -454,7 +381,6 @@
                 });
                 
                 const result = await response.json();
-                addDebugLog('获取消费记录响应: ' + JSON.stringify(result));
 
                 if (result.success && result.data && result.data.length > 0) {
                     const records = result.data;
@@ -483,7 +409,6 @@
                     `;
                 }
             } catch (error) {
-                addDebugLog('加载消费记录异常: ' + error.message);
                 historyCard.innerHTML = `
                     <h3>消费记录</h3>
                     <div class="no-history">加载失败</div>

@@ -536,6 +536,109 @@ class StatsService:
                 },
                 "daily": []
             }
+    
+    async def get_download_count(self, download_type: Optional[str] = None) -> dict:
+        """
+        获取下载量统计
+        
+        Args:
+            download_type: 下载类型（android、windows），如果为None则返回所有类型的统计
+        
+        Returns:
+            下载量统计字典，格式：{"android": 100, "windows": 50} 或 {"total": 150, "android": 100, "windows": 50}
+        """
+        try:
+            async with db.get_cursor() as cursor:
+                if download_type:
+                    # 查询指定类型
+                    await cursor.execute("""
+                        SELECT type, download_count 
+                        FROM download_stats 
+                        WHERE type = %s
+                    """, (download_type,))
+                    result = await cursor.fetchone()
+                    if result:
+                        return {result['type']: result['download_count']}
+                    return {download_type: 0}
+                else:
+                    # 查询所有类型
+                    await cursor.execute("""
+                        SELECT type, download_count 
+                        FROM download_stats
+                        ORDER BY type
+                    """)
+                    results = await cursor.fetchall()
+                    stats = {}
+                    total = 0
+                    for row in results:
+                        stats[row['type']] = row['download_count']
+                        total += row['download_count']
+                    stats['total'] = total
+                    return stats
+        except Exception as e:
+            logger.error(f"查询下载量失败: {e}")
+            return {}
+    
+    async def increment_download_count(self, download_type: str) -> bool:
+        """
+        增加下载量（+1）
+        
+        Args:
+            download_type: 下载类型（android、windows）
+        
+        Returns:
+            是否成功
+        """
+        try:
+            async with db.get_cursor() as cursor:
+                await cursor.execute("""
+                    INSERT INTO download_stats (type, download_count) 
+                    VALUES (%s, 1)
+                    ON DUPLICATE KEY UPDATE download_count = download_count + 1
+                """, (download_type,))
+                return True
+        except Exception as e:
+            logger.error(f"增加下载量失败: {e}")
+            return False
+    
+    async def get_bound_users_count(self) -> int:
+        """
+        获取已绑定用户数（按openid去重）
+        
+        Returns:
+            已绑定用户数
+        """
+        try:
+            async with db.get_cursor() as cursor:
+                await cursor.execute("""
+                    SELECT COUNT(DISTINCT openid) as count 
+                    FROM wechat_users
+                """)
+                result = await cursor.fetchone()
+                return result['count'] if result else 0
+        except Exception as e:
+            logger.error(f"查询已绑定用户数失败: {e}")
+            return 0
+    
+    async def get_member_count(self) -> int:
+        """
+        获取会员数量（从wechat_users表中统计is_member=1的用户）
+        
+        Returns:
+            会员数量
+        """
+        try:
+            async with db.get_cursor() as cursor:
+                await cursor.execute("""
+                    SELECT COUNT(DISTINCT openid) as count 
+                    FROM wechat_users 
+                    WHERE is_member = 1
+                """)
+                result = await cursor.fetchone()
+                return result['count'] if result else 0
+        except Exception as e:
+            logger.error(f"查询会员数量失败: {e}")
+            return 0
 
 
 # 全局统计服务实例

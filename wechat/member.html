@@ -137,39 +137,9 @@
         .error.show {
             display: block;
         }
-
-        .debug-info {
-            background: #f0f0f0;
-            color: #333;
-            padding: 15px;
-            border-radius: 10px;
-            margin-top: 20px;
-            font-size: 12px;
-            max-height: 200px;
-            overflow-y: auto;
-            display: none;
-        }
-
-        .debug-info.show {
-            display: block;
-        }
-
-        .debug-toggle {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            background: rgba(0,0,0,0.7);
-            color: white;
-            padding: 8px 15px;
-            border-radius: 5px;
-            font-size: 12px;
-            z-index: 9999;
-            cursor: pointer;
-        }
     </style>
 </head>
 <body>
-    <div class="debug-toggle" onclick="toggleDebug()">调试信息</div>
     <div class="container">
         <div class="header">
             <h1 id="pageTitle">开通会员</h1>
@@ -188,26 +158,9 @@
         </div>
 
         <div class="error" id="error"></div>
-
-        <div class="debug-info" id="debugInfo">
-            <div><strong>调试信息：</strong></div>
-            <div id="debugContent"></div>
-        </div>
     </div>
 
     <script>
-        // 调试信息显示
-        function addDebugLog(message) {
-            const content = document.getElementById('debugContent');
-            const time = new Date().toLocaleTimeString();
-            content.innerHTML += `<div>${time} - ${message}</div>`;
-            console.log(`[DEBUG] ${message}`);
-        }
-
-        function toggleDebug() {
-            const debugInfo = document.getElementById('debugInfo');
-            debugInfo.classList.toggle('show');
-        }
         const API_BASE_URL = 'https://www.xintuxiangce.top/api/v1';
         let openid = null;
         let userInfo = null;
@@ -217,14 +170,9 @@
         const urlOpenId = urlParams.get('openid');
         const code = urlParams.get('code');
         
-        addDebugLog('当前URL: ' + window.location.href);
-        addDebugLog('openid参数: ' + (urlOpenId || '无'));
-        addDebugLog('code参数: ' + (code || '无'));
-        
         if (urlOpenId) {
             // 直接从参数获取openid（从其他页面跳转过来）
             openid = urlOpenId;
-            addDebugLog('从参数获取openid: ' + openid.substring(0, 16) + '...');
             // 清除URL中的openid参数
             window.history.replaceState({}, document.title, window.location.pathname);
             document.getElementById('error').classList.remove('show');
@@ -232,38 +180,29 @@
             checkMemberStatus();
         } else if (code) {
             // 通过code获取openid
-            addDebugLog('开始通过code获取openid...');
             document.getElementById('error').textContent = '正在获取用户信息...';
             document.getElementById('error').classList.add('show');
             document.getElementById('payBtn').disabled = true;
             
             fetch(`${API_BASE_URL}/auth/wechat?code=${code}`)
-                .then(res => {
-                    addDebugLog('授权接口响应状态: ' + res.status);
-                    return res.json();
-                })
+                .then(res => res.json())
                 .then(data => {
-                    addDebugLog('授权响应: ' + JSON.stringify(data));
                     if (data.success && data.openid) {
                         openid = data.openid;
-                        addDebugLog('成功获取openid: ' + openid.substring(0, 16) + '...');
                         // 清除URL中的code参数（防止重复使用）
                         window.history.replaceState({}, document.title, window.location.pathname);
                         document.getElementById('error').classList.remove('show');
                         // 检查用户会员状态
                         checkMemberStatus();
                     } else {
-                        addDebugLog('授权失败: ' + JSON.stringify(data));
                         showError('获取用户信息失败：' + (data.detail || '未知错误'));
                     }
                 })
                 .catch(err => {
-                    addDebugLog('获取openid异常: ' + err.message);
                     showError('网络错误：' + err.message);
                 });
         } else {
             // 既没有openid参数也没有code参数
-            addDebugLog('缺少openid或code参数');
             showError('未获取到授权信息，请通过公众号菜单重新进入');
             document.getElementById('payBtn').disabled = true;
         }
@@ -287,18 +226,15 @@
                 });
 
                 const result = await response.json();
-                addDebugLog('获取用户信息: ' + JSON.stringify(result));
 
                 if (result.success) {
                     userInfo = result.data || result;
                     renderPage();
                 } else {
-                    addDebugLog('获取用户信息失败');
                     // 默认显示开通页面
                     renderPage();
                 }
             } catch (error) {
-                addDebugLog('检查会员状态异常: ' + error.message);
                 // 默认显示开通页面
                 renderPage();
             }
@@ -355,12 +291,9 @@
 
         async function createOrder() {
             if (!openid) {
-                addDebugLog('没有openid，无法创建订单');
                 showError('请先完成授权');
                 return;
             }
-
-            addDebugLog('开始创建订单，openid: ' + openid.substring(0, 16) + '...');
 
             const btn = document.getElementById('payBtn');
             const loading = document.getElementById('loading');
@@ -372,7 +305,6 @@
 
             try {
                 const requestBody = { order_type: 'member' };
-                addDebugLog('请求参数: ' + JSON.stringify(requestBody));
                 
                 const response = await fetch(`${API_BASE_URL}/payment/create-order`, {
                     method: 'POST',
@@ -382,23 +314,16 @@
                     },
                     body: JSON.stringify(requestBody)
                 });
-                
-                addDebugLog('响应状态: ' + response.status);
 
                 const result = await response.json();
-                addDebugLog('创建订单响应: ' + JSON.stringify(result));
 
                 if (result.success && result.payment_params) {
-                    addDebugLog('订单创建成功，准备调起支付');
-                    addDebugLog('支付参数已获取');
                     // 调起微信支付
                     callWeChatPay(result.payment_params);
                 } else {
-                    addDebugLog('创建订单失败: ' + JSON.stringify(result));
                     showError('创建订单失败：' + (result.detail || '未知错误'));
                 }
             } catch (error) {
-                addDebugLog('创建订单异常: ' + error.message);
                 showError('网络错误：' + error.message);
             } finally {
                 loading.classList.remove('show');
@@ -423,23 +348,18 @@
         }
 
         function invokePay(params) {
-            addDebugLog('调起微信支付，等待用户确认...');
             WeixinJSBridge.invoke('getBrandWCPayRequest', params, function(res) {
-                addDebugLog('支付结果: ' + JSON.stringify(res));
                 if (res.err_msg === "get_brand_wcpay_request:ok") {
-                    addDebugLog('支付成功！');
                     alert('支付成功！');
                     // 跳转到额度页面，传递openid参数
                     window.location.href = 'credits_info.html?openid=' + openid;
                 } else {
-                    addDebugLog('支付失败: ' + res.err_msg);
                     showError('支付失败：' + res.err_msg);
                 }
             });
         }
 
         function showError(message) {
-            addDebugLog('错误: ' + message);
             const error = document.getElementById('error');
             error.textContent = message;
             error.classList.add('show');

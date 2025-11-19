@@ -157,37 +157,6 @@
         .error.show {
             display: block;
         }
-
-        .debug-info {
-            background: #f0f0f0;
-            color: #333;
-            padding: 15px;
-            border-radius: 10px;
-            margin-top: 20px;
-            font-size: 12px;
-            max-height: 200px;
-            overflow-y: auto;
-            display: none;
-        }
-
-        .debug-info.show {
-            display: block;
-        }
-
-        .debug-toggle {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            background: #ff6b6b !important;
-            color: white !important;
-            padding: 10px 20px;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: bold;
-            z-index: 999999;
-            cursor: pointer;
-            box-shadow: 0 4px 15px rgba(255, 107, 107, 0.5);
-        }
     </style>
 </head>
 <body>
@@ -247,11 +216,6 @@
         </div>
 
         <div class="error" id="error"></div>
-
-        <div class="debug-info" id="debugInfo">
-            <div><strong>调试信息：</strong></div>
-            <div id="debugInfoContent"></div>
-        </div>
     </div>
 
     <script>
@@ -259,42 +223,20 @@
         let openid = null;
         let selectedPackage = null;
 
-        // 调试信息显示
-        const debugLogs = [];
-        function addDebugLog(message) {
-            const time = new Date().toLocaleTimeString();
-            debugLogs.push(`${time} - ${message}`);
-            console.log(`[DEBUG ${time}] ${message}`);
-        }
-
-        function toggleDebug() {
-            const debugInfo = document.getElementById('debugInfo');
-            const content = document.getElementById('debugInfoContent');
-            content.innerHTML = debugLogs.join('<br>');
-            debugInfo.classList.toggle('show');
-        }
-
         // 检查URL参数：优先使用openid参数，其次使用code参数
         const urlParams = new URLSearchParams(window.location.search);
         const urlOpenId = urlParams.get('openid');
         const code = urlParams.get('code');
         
-        addDebugLog('当前URL: ' + window.location.href);
-        addDebugLog('openid参数: ' + (urlOpenId || '无'));
-        addDebugLog('code参数: ' + (code || '无'));
-        
         if (urlOpenId) {
             // 直接从参数获取openid（从其他页面跳转过来）
             openid = urlOpenId;
-            addDebugLog('从参数获取openid: ' + openid.substring(0, 16) + '...');
             // 清除URL中的openid参数
             window.history.replaceState({}, document.title, window.location.pathname);
             // 启用支付按钮
             document.getElementById('payBtn').disabled = false;
         } else if (code) {
             // 通过code获取openid（从公众号菜单进入）
-            addDebugLog('开始通过code获取openid...');
-            
             // 添加时间戳防止缓存
             const authTimestamp = new Date().getTime();
             fetch(`${API_BASE_URL}/auth/wechat?code=${code}&t=${authTimestamp}`, {
@@ -304,33 +246,25 @@
                 },
                 cache: 'no-store'
             })
-                .then(res => {
-                    addDebugLog('授权接口响应状态: ' + res.status);
-                    return res.json();
-                })
+                .then(res => res.json())
                 .then(data => {
-                    addDebugLog('授权响应: ' + JSON.stringify(data));
                     if (data.success && data.openid) {
                         openid = data.openid;
-                        addDebugLog('成功获取openid: ' + openid.substring(0, 16) + '...');
                         // 清除URL中的code参数
                         window.history.replaceState({}, document.title, window.location.pathname);
                         // 启用支付按钮
                         document.getElementById('payBtn').disabled = false;
                     } else {
-                        addDebugLog('授权失败: ' + JSON.stringify(data));
                         document.getElementById('error').textContent = '获取用户信息失败：' + (data.detail || '未知错误');
                         document.getElementById('error').classList.add('show');
                     }
                 })
                 .catch(err => {
-                    addDebugLog('获取openid异常: ' + err.message);
                     document.getElementById('error').textContent = '网络错误：' + err.message;
                     document.getElementById('error').classList.add('show');
                 });
         } else {
             // 既没有openid参数也没有code参数
-            addDebugLog('缺少openid或code参数');
             document.getElementById('error').textContent = '未获取到授权信息，请通过公众号菜单重新进入';
             document.getElementById('error').classList.add('show');
         }
@@ -354,32 +288,20 @@
         }
 
         async function createOrder() {
-            addDebugLog('========= 开始创建订单 =========');
-            
             if (!openid) {
-                addDebugLog('错误: 没有openid');
                 showError('请先完成授权');
                 return;
             }
 
-            addDebugLog('openid: ' + openid.substring(0, 16) + '...');
-
             if (!selectedPackage) {
-                addDebugLog('错误: 没有选择套餐');
                 showError('请选择套餐');
                 return;
             }
-            
-            addDebugLog('选择的套餐: ' + JSON.stringify(selectedPackage));
 
             const requestData = {
                 order_type: 'credits',
                 credits_amount: selectedPackage.credits
             };
-
-            addDebugLog('创建订单请求: ' + JSON.stringify(requestData));
-            addDebugLog('请求URL: ' + API_BASE_URL + '/payment/create-order');
-            addDebugLog('请求方法: POST');
 
             const btn = document.getElementById('payBtn');
             const loading = document.getElementById('loading');
@@ -404,81 +326,55 @@
                     body: JSON.stringify(requestData)
                 });
 
-                addDebugLog('创建订单响应状态: ' + response.status);
-
                 const result = await response.json();
-                addDebugLog('创建订单响应: ' + JSON.stringify(result));
 
                 if (result.success && result.payment_params) {
-                    addDebugLog('创建订单成功！');
-                    const paymentData = result.payment_params;
-                    addDebugLog('支付参数: ' + JSON.stringify(paymentData));
-                    
                     // 调用微信支付
-                    invokePay(paymentData);
+                    invokePay(result.payment_params);
                 } else {
-                    addDebugLog('创建订单失败: ' + JSON.stringify(result));
-                    addDebugLog('错误详情: ' + (result.detail || '未知错误'));
                     showError('创建订单失败：' + (result.detail || '未知错误'));
                 }
             } catch (error) {
-                addDebugLog('创建订单异常: ' + error.message);
-                addDebugLog('异常堆栈: ' + error.stack);
                 showError('网络错误：' + error.message);
             } finally {
                 btn.disabled = false;
                 loading.style.display = 'none';
-                addDebugLog('========= 订单创建结束 =========');
             }
         }
 
         function invokePay(params) {
-            addDebugLog('========= 开始调起微信支付 =========');
-            addDebugLog('支付参数: ' + JSON.stringify(params));
-            
             // 检查WeixinJSBridge是否可用
             if (typeof WeixinJSBridge === 'undefined') {
-                addDebugLog('错误: WeixinJSBridge未定义，等待加载...');
                 if (document.addEventListener) {
                     document.addEventListener('WeixinJSBridgeReady', function() {
-                        addDebugLog('WeixinJSBridge已加载');
                         invokePay(params);
                     }, false);
                 } else if (document.attachEvent) {
                     document.attachEvent('WeixinJSBridgeReady', function() {
-                        addDebugLog('WeixinJSBridge已加载');
                         invokePay(params);
                     });
                     document.attachEvent('onWeixinJSBridgeReady', function() {
-                        addDebugLog('WeixinJSBridge已加载');
                         invokePay(params);
                     });
                 }
                 return;
             }
             
-            addDebugLog('WeixinJSBridge可用，调用支付接口...');
-            
             try {
                 WeixinJSBridge.invoke('getBrandWCPayRequest', params, function(res) {
-                    addDebugLog('支付结果回调: ' + JSON.stringify(res));
                     if (res.err_msg === "get_brand_wcpay_request:ok") {
-                        addDebugLog('支付成功！');
                         alert('支付成功！');
                         window.location.href = 'credits_info.html?openid=' + openid;
                     } else {
-                        addDebugLog('支付失败: ' + res.err_msg);
                         showError('支付失败：' + res.err_msg);
                     }
                 });
             } catch (error) {
-                addDebugLog('调用支付接口异常: ' + error.message);
                 showError('支付接口错误：' + error.message);
             }
         }
 
         function showError(message) {
-            addDebugLog('错误: ' + message);
             const error = document.getElementById('error');
             error.textContent = message;
             error.classList.add('show');

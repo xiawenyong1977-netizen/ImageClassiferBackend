@@ -89,7 +89,7 @@ const DEFAULT_PROMPT = `请对这张图片进行分类。你必须从以下8个�
 只返回JSON，不要有其他文字。`;
 
 let currentConfig = {
-    apiUrl: 'https://api.aifuture.net.cn',  // 使用HTTPS API域名
+    apiUrl: '',  // 使用相对路径，通过Lighttpd转发到app服务器
     llmProvider: 'aliyun',
     llmApiKey: '',
     llmModel: 'qwen-vl-plus',  // 固定使用通义千问VL-Plus
@@ -146,6 +146,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // 检查系统状态
     checkSystemStatus();
     
+    // 加载核心指标
+    loadCoreStats();
+    
     // 加载统计数据
     loadTodayStats();
     loadCacheStats();
@@ -157,6 +160,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // 自动刷新统计（每30秒）
     setInterval(() => {
+        loadCoreStats();  // 核心指标始终刷新
         if (document.getElementById('stats-tab').classList.contains('active')) {
             loadTodayStats();
             loadCacheStats();
@@ -229,6 +233,62 @@ function showTab(tabName) {
     // 如果切换到地理位置页，加载位置统计
     if (tabName === 'location') {
         loadLocationStats();
+    }
+}
+
+// 加载核心指标
+async function loadCoreStats() {
+    try {
+        // 并行加载3个指标
+        const [downloadRes, boundUsersRes, memberRes] = await Promise.all([
+            authFetch(`${currentConfig.apiUrl}/api/v1/stats/download-count`),
+            authFetch(`${currentConfig.apiUrl}/api/v1/stats/bound-users-count`),
+            authFetch(`${currentConfig.apiUrl}/api/v1/stats/member-count`)
+        ]);
+        
+        // 检查响应状态
+        if (!downloadRes.ok) {
+            console.error('下载量统计请求失败:', downloadRes.status, downloadRes.statusText);
+            const errorText = await downloadRes.text();
+            console.error('错误详情:', errorText);
+        }
+        if (!boundUsersRes.ok) {
+            console.error('已绑定用户数统计请求失败:', boundUsersRes.status, boundUsersRes.statusText);
+        }
+        if (!memberRes.ok) {
+            console.error('会员数量统计请求失败:', memberRes.status, memberRes.statusText);
+        }
+        
+        const downloadData = await downloadRes.json();
+        const boundUsersData = await boundUsersRes.json();
+        const memberData = await memberRes.json();
+        
+        console.log('下载量统计响应:', downloadData);
+        console.log('已绑定用户数统计响应:', boundUsersData);
+        console.log('会员数量统计响应:', memberData);
+        
+        // 下载量统计（按类型：android、windows）
+        const downloadStats = downloadData.data || {};
+        const androidCount = downloadStats.android || 0;
+        const windowsCount = downloadStats.windows || 0;
+        
+        const boundUsersCount = boundUsersData.data?.bound_users_count || 0;
+        const memberCount = memberData.data?.member_count || 0;
+        
+        // 分别显示Android和Windows下载量
+        document.getElementById('download-count-android').textContent = formatNumber(androidCount);
+        document.getElementById('download-count-windows').textContent = formatNumber(windowsCount);
+        document.getElementById('bound-users-count').textContent = formatNumber(boundUsersCount);
+        document.getElementById('member-count').textContent = formatNumber(memberCount);
+        
+    } catch (error) {
+        console.error('加载核心指标失败:', error);
+        console.error('错误堆栈:', error.stack);
+        // 显示错误但不影响其他功能
+        document.getElementById('download-count-android').textContent = '加载失败';
+        document.getElementById('download-count-windows').textContent = '加载失败';
+        document.getElementById('bound-users-count').textContent = '加载失败';
+        document.getElementById('member-count').textContent = '加载失败';
     }
 }
 
