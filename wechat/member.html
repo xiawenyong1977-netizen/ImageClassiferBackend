@@ -164,6 +164,7 @@
         const API_BASE_URL = 'https://www.xintuxiangce.top/api/v1';
         let openid = null;
         let userInfo = null;
+        let priceConfig = null;
 
         // 检查URL参数：优先使用openid参数，其次使用code参数
         const urlParams = new URLSearchParams(window.location.search);
@@ -207,11 +208,34 @@
             document.getElementById('payBtn').disabled = true;
         }
 
+        // 加载价格配置
+        async function loadPriceConfig() {
+            try {
+                const timestamp = new Date().getTime();
+                const response = await fetch(`${API_BASE_URL}/payment/prices?t=${timestamp}`, {
+                    headers: {
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache'
+                    },
+                    cache: 'no-store'
+                });
+                const result = await response.json();
+                if (result.success && result.data) {
+                    priceConfig = result.data;
+                }
+            } catch (error) {
+                console.error('加载价格配置失败:', error);
+            }
+        }
+
         // 检查用户会员状态
         async function checkMemberStatus() {
             if (!openid) {
                 return;
             }
+
+            // 先加载价格配置
+            await loadPriceConfig();
 
             try {
                 // 添加时间戳防止缓存
@@ -271,6 +295,8 @@
                 document.getElementById('pageTitle').textContent = '开通会员';
                 // 恢复副标题
                 document.getElementById('headerSubtitle').textContent = '享受会员专属权益';
+                const memberPrice = priceConfig ? priceConfig.member_price : 0.10;
+                const priceLabel = priceConfig && priceConfig.is_test_price ? '测试价格' : '';
                 memberCard.innerHTML = `
                     <ul class="features">
                         <li>✓ 智能分类无限照片数量</li>
@@ -278,8 +304,8 @@
                         <li>✓ 一次开通永久会员</li>
                         <li>✓ 专属客服支持</li>
                     </ul>
-                    <div class="price" style="margin-top: 20px; font-size: 36px;">¥0.10</div>
-                    <p style="font-size: 12px; opacity: 0.8;">测试价格</p>
+                    <div class="price" style="margin-top: 20px; font-size: 36px;">¥${memberPrice.toFixed(2)}</div>
+                    ${priceLabel ? `<p style="font-size: 12px; opacity: 0.8;">${priceLabel}</p>` : ''}
                 `;
                 payBtn.textContent = '立即开通';
                 payBtn.onclick = function() {

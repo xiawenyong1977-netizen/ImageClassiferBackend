@@ -329,6 +329,64 @@ async def payment_notify(request: Request):
         return PlainTextResponse(content="<xml><return_code><![CDATA[FAIL]]></return_code></xml>")
 
 
+@router.get("/prices", summary="获取价格配置")
+async def get_prices():
+    """
+    获取价格配置（公开接口，无需认证）
+    返回会员价格和额度价格配置
+    """
+    try:
+        # 解析套餐数量列表（用分号分隔）
+        if settings.USE_TEST_PRICE:
+            credits_amounts_str = settings.CREDITS_AMOUNTS_TEST
+            credits_price = settings.CREDITS_PRICE_TEST
+        else:
+            credits_amounts_str = settings.CREDITS_AMOUNTS_PROD
+            credits_price = settings.CREDITS_PRICE_PROD
+        
+        # 解析套餐数量列表
+        credits_amounts = []
+        if credits_amounts_str:
+            for amount_str in credits_amounts_str.split(';'):
+                amount_str = amount_str.strip()
+                if amount_str:
+                    try:
+                        amount = int(amount_str)
+                        if amount > 0:
+                            credits_amounts.append(amount)
+                    except ValueError:
+                        continue
+        
+        # 如果没有配置，使用默认值
+        if not credits_amounts:
+            if settings.USE_TEST_PRICE:
+                credits_amounts = [settings.CREDITS_AMOUNT_TEST]
+            else:
+                credits_amounts = [settings.CREDITS_AMOUNT_PROD]
+        
+        # 生成套餐列表
+        packages = []
+        for amount in credits_amounts:
+            packages.append({
+                "credits": amount,
+                "price": amount * credits_price
+            })
+        
+        return {
+            "success": True,
+            "data": {
+                "member_price": settings.MEMBER_PRICE_TEST if settings.USE_TEST_PRICE else settings.MEMBER_PRICE_PROD,
+                "credits_price": credits_price,
+                "credits_amount": credits_amounts[0] if credits_amounts else 0,  # 保留兼容性
+                "credits_packages": packages,  # 新增：套餐列表
+                "is_test_price": settings.USE_TEST_PRICE
+            }
+        }
+    except Exception as e:
+        logger.error(f"获取价格配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/orders", summary="查询订单列表")
 async def get_orders(
     x_wechat_openid: str = Header(None, alias="X-WeChat-OpenID")

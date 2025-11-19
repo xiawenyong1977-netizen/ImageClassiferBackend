@@ -104,12 +104,14 @@ class Settings(BaseSettings):
     # 测试价格配置
     MEMBER_PRICE_TEST: float = Field(default=0.10, description="会员测试价格(元)")
     CREDITS_PRICE_TEST: float = Field(default=0.01, description="额度测试价格(元)")
-    CREDITS_AMOUNT_TEST: int = Field(default=1, description="测试额度数量")
+    CREDITS_AMOUNT_TEST: int = Field(default=1, description="测试额度数量（默认值，已废弃，使用CREDITS_AMOUNTS_TEST）")
+    CREDITS_AMOUNTS_TEST: str = Field(default="1;5;10;50;100", description="测试额度套餐数量列表（用分号分隔）")
     
     # 正式价格配置（待启用）
     MEMBER_PRICE_PROD: float = Field(default=29.90, description="会员正式价格(元)")
     CREDITS_PRICE_PROD: float = Field(default=9.90, description="额度正式价格(元)")
-    CREDITS_AMOUNT_PROD: int = Field(default=10, description="正式额度数量")
+    CREDITS_AMOUNT_PROD: int = Field(default=10, description="正式额度数量（默认值，已废弃，使用CREDITS_AMOUNTS_PROD）")
+    CREDITS_AMOUNTS_PROD: str = Field(default="10;20;50;100", description="正式额度套餐数量列表（用分号分隔）")
     
     # 价格模式切换
     USE_TEST_PRICE: bool = Field(default=True, description="是否使用测试价格")

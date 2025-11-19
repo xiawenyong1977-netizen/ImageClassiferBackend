@@ -166,45 +166,10 @@
             <p>选择适合您的额度套餐</p>
         </div>
 
-        <div class="packages">
-            <div class="package" data-credits="1" data-price="0.01" onclick="selectPackage(this)">
-                <div class="package-header">
-                    <div class="package-title">1张</div>
-                    <div class="package-price">¥0.01</div>
-                </div>
-                <div class="package-desc">测试套餐</div>
-            </div>
-
-            <div class="package" data-credits="5" data-price="0.05" onclick="selectPackage(this)">
-                <div class="package-header">
-                    <div class="package-title">5张</div>
-                    <div class="package-price">¥0.05</div>
-                </div>
-                <div class="package-desc">小量测试</div>
-            </div>
-
-            <div class="package" data-credits="10" data-price="0.10" onclick="selectPackage(this)">
-                <div class="package-header">
-                    <div class="package-title">10张</div>
-                    <div class="package-price">¥0.10</div>
-                </div>
-                <div class="package-desc">标准测试</div>
-            </div>
-
-            <div class="package" data-credits="50" data-price="0.50" onclick="selectPackage(this)">
-                <div class="package-header">
-                    <div class="package-title">50张</div>
-                    <div class="package-price">¥0.50</div>
-                </div>
-                <div class="package-desc">批量测试</div>
-            </div>
-
-            <div class="package" data-credits="100" data-price="1.00" onclick="selectPackage(this)">
-                <div class="package-header">
-                    <div class="package-title">100张</div>
-                    <div class="package-price">¥1.00</div>
-                </div>
-                <div class="package-desc">大规模测试</div>
+        <div class="packages" id="packages">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>加载套餐中...</p>
             </div>
         </div>
 
@@ -222,19 +187,103 @@
         const API_BASE_URL = 'https://www.xintuxiangce.top/api/v1';
         let openid = null;
         let selectedPackage = null;
+        let priceConfig = null;
 
         // 检查URL参数：优先使用openid参数，其次使用code参数
         const urlParams = new URLSearchParams(window.location.search);
         const urlOpenId = urlParams.get('openid');
         const code = urlParams.get('code');
         
+        // 加载价格配置和套餐
+        async function loadPriceConfig() {
+            try {
+                const timestamp = new Date().getTime();
+                const response = await fetch(`${API_BASE_URL}/payment/prices?t=${timestamp}`, {
+                    headers: {
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache'
+                    },
+                    cache: 'no-store'
+                });
+                const result = await response.json();
+                if (result.success && result.data) {
+                    priceConfig = result.data;
+                    renderPackages();
+                } else {
+                    showError('加载价格配置失败');
+                }
+            } catch (error) {
+                console.error('加载价格配置失败:', error);
+                showError('加载价格配置失败：' + error.message);
+            }
+        }
+
+        // 渲染套餐列表
+        function renderPackages() {
+            if (!priceConfig) {
+                return;
+            }
+
+            const packagesDiv = document.getElementById('packages');
+            const isTest = priceConfig.is_test_price;
+            
+            // 获取套餐列表（优先使用 credits_packages，兼容旧的 credits_amount）
+            let packages = [];
+            if (priceConfig.credits_packages && Array.isArray(priceConfig.credits_packages)) {
+                packages = priceConfig.credits_packages;
+            } else if (priceConfig.credits_amount) {
+                // 兼容旧版本：只有一个套餐
+                packages = [{
+                    credits: priceConfig.credits_amount,
+                    price: priceConfig.credits_amount * priceConfig.credits_price
+                }];
+            }
+
+            if (packages.length === 0) {
+                packagesDiv.innerHTML = '<div class="error">暂无可用套餐</div>';
+                return;
+            }
+
+            // 生成套餐HTML
+            let packagesHTML = '';
+            packages.forEach((pkg, index) => {
+                const isSelected = index === 0 ? 'selected' : '';
+                packagesHTML += `
+                    <div class="package ${isSelected}" data-credits="${pkg.credits}" data-price="${pkg.price.toFixed(2)}" onclick="selectPackage(this)">
+                        <div class="package-header">
+                            <div class="package-title">${pkg.credits}张</div>
+                            <div class="package-price">¥${pkg.price.toFixed(2)}</div>
+                        </div>
+                        <div class="package-desc">${isTest ? '测试套餐' : '标准套餐'}</div>
+                    </div>
+                `;
+            });
+
+            packagesDiv.innerHTML = packagesHTML;
+
+            // 默认选中第一个套餐
+            const firstPackage = packages[0];
+            if (firstPackage) {
+                selectedPackage = {
+                    credits: firstPackage.credits,
+                    price: firstPackage.price
+                };
+                const payBtn = document.getElementById('payBtn');
+                payBtn.textContent = `立即购买 ¥${firstPackage.price.toFixed(2)}`;
+                // 如果已经有 openid，启用按钮
+                if (openid) {
+                    payBtn.disabled = false;
+                }
+            }
+        }
+        
         if (urlOpenId) {
             // 直接从参数获取openid（从其他页面跳转过来）
             openid = urlOpenId;
             // 清除URL中的openid参数
             window.history.replaceState({}, document.title, window.location.pathname);
-            // 启用支付按钮
-            document.getElementById('payBtn').disabled = false;
+            // 加载价格配置
+            loadPriceConfig();
         } else if (code) {
             // 通过code获取openid（从公众号菜单进入）
             // 添加时间戳防止缓存
@@ -252,8 +301,15 @@
                         openid = data.openid;
                         // 清除URL中的code参数
                         window.history.replaceState({}, document.title, window.location.pathname);
-                        // 启用支付按钮
-                        document.getElementById('payBtn').disabled = false;
+                        // 如果价格配置已加载，启用按钮；否则加载价格配置
+                        if (priceConfig) {
+                            const payBtn = document.getElementById('payBtn');
+                            if (selectedPackage) {
+                                payBtn.disabled = false;
+                            }
+                        } else {
+                            loadPriceConfig();
+                        }
                     } else {
                         document.getElementById('error').textContent = '获取用户信息失败：' + (data.detail || '未知错误');
                         document.getElementById('error').classList.add('show');
