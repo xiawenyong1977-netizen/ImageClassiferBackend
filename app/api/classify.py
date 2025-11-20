@@ -121,9 +121,23 @@ async def batch_check_cache(
             ip_address=ip_address
         )
         
-        # 统计缓存命中数
-        cached_count = sum(1 for item in results if item['cached'])
+        # 统计缓存命中数（cached 字段应该是布尔值）
+        cached_count = sum(1 for item in results if item.get('cached') is True)
         miss_count = len(results) - cached_count
+        
+        # 调试日志
+        logger.info(f"批量缓存查询统计 [{request_id}]: 总数={len(results)}, 命中={cached_count}, 未命中={miss_count}")
+        if cached_count == 0 and len(results) > 0:
+            # 如果命中数为0但总数大于0，记录详细信息用于调试
+            sample_items = [
+                {
+                    "image_hash": item.get('image_hash'), 
+                    "cached": item.get('cached'), 
+                    "cached_type": str(type(item.get('cached')))
+                } 
+                for item in results[:3]
+            ]
+            logger.warning(f"批量缓存查询命中数为0但总数>0 [{request_id}]: 样本数据={sample_items}")
         
         # 记录统一日志（批量缓存查询）
         from app.services.stats_service import stats_service

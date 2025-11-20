@@ -52,6 +52,14 @@ class StatsService:
                     total_images, cached_count, llm_count, local_count, created_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 """
+                # 确保 cached_count 是整数类型
+                cached_count = int(cached_count) if cached_count is not None else 0
+                total_images = int(total_images) if total_images is not None else 0
+                llm_count = int(llm_count) if llm_count is not None else 0
+                local_count = int(local_count) if local_count is not None else 0
+                
+                logger.info(f"记录统一请求日志 [{request_id}]: type={request_type}, total={total_images}, cached={cached_count}, llm={llm_count}, local={local_count}")
+                
                 await cursor.execute(sql, (
                     request_id, request_type, ip_address, client_id, openid,
                     total_images, cached_count, llm_count, local_count
@@ -152,14 +160,20 @@ class StatsService:
                         
                         -- 图片分类统计（包括单个分类、批量分类、单个缓存查询、批量缓存查询）
                         SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify', 'single_cache', 'batch_cache') THEN total_images ELSE 0 END) as classify_total,
-                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify', 'single_cache', 'batch_cache') THEN cached_count ELSE 0 END) as classify_cached,
-                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify') THEN llm_count ELSE 0 END) as classify_llm,
-                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify') THEN local_count ELSE 0 END) as classify_local,
+                        -- 缓存命中数：包括分类请求中的缓存命中 + 缓存查询请求中的缓存命中
+                        -- 注意：batch_cache 和 single_cache 的 cached_count 必须被统计
+                        SUM(CASE 
+                            WHEN request_type IN ('single_classify', 'batch_classify', 'single_cache', 'batch_cache') 
+                            THEN COALESCE(cached_count, 0) 
+                            ELSE 0 
+                        END) as classify_cached,
+                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify') THEN COALESCE(llm_count, 0) ELSE 0 END) as classify_llm,
+                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify') THEN COALESCE(local_count, 0) ELSE 0 END) as classify_local,
                         
                         -- 图像编辑统计
                         SUM(CASE WHEN request_type = 'image_edit' THEN total_images ELSE 0 END) as edit_total,
-                        SUM(CASE WHEN request_type = 'image_edit' THEN cached_count ELSE 0 END) as edit_cached,
-                        SUM(CASE WHEN request_type = 'image_edit' THEN llm_count ELSE 0 END) as edit_llm
+                        SUM(CASE WHEN request_type = 'image_edit' THEN COALESCE(cached_count, 0) ELSE 0 END) as edit_cached,
+                        SUM(CASE WHEN request_type = 'image_edit' THEN COALESCE(llm_count, 0) ELSE 0 END) as edit_llm
                     FROM unified_request_log log
                     LEFT JOIN (
                         -- 获取每个 client_id 对应的 openid（如果有）
@@ -171,6 +185,23 @@ class StatsService:
                     WHERE log.created_date = CURDATE()
                 """)
                 result = await cursor.fetchone()
+                
+                # 调试：查询各类型的详细统计
+                await cursor.execute("""
+                    SELECT 
+                        request_type,
+                        COUNT(*) as request_count,
+                        SUM(total_images) as total_images,
+                        SUM(COALESCE(cached_count, 0)) as cached_count,
+                        SUM(COALESCE(llm_count, 0)) as llm_count,
+                        SUM(COALESCE(local_count, 0)) as local_count
+                    FROM unified_request_log
+                    WHERE created_date = CURDATE()
+                      AND request_type IN ('single_classify', 'batch_classify', 'single_cache', 'batch_cache')
+                    GROUP BY request_type
+                """)
+                detail_stats = await cursor.fetchall()
+                logger.debug(f"今日分类统计详情: {detail_stats}")
                 
                 if result:
                     # 确保所有值都转换为正确的数字类型（处理 decimal.Decimal）
