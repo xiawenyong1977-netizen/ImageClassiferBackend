@@ -209,6 +209,9 @@ async def classify_image(
         if not is_valid:
             raise HTTPException(status_code=400, detail=error_msg)
         
+        # 标准化图片格式（将MPO等特殊格式转换为JPEG）
+        image_bytes = ImageUtils.normalize_image_format(image_bytes)
+        
         # 获取user_id和IP
         user_id = x_user_id
         ip_address = request.client.host if request else None
@@ -317,6 +320,9 @@ async def batch_classify(
                 is_valid, error_msg = ImageUtils.validate_image(image_bytes)
                 if not is_valid:
                     raise Exception(error_msg)
+                
+                # 标准化图片格式（将MPO等特殊格式转换为JPEG）
+                image_bytes = ImageUtils.normalize_image_format(image_bytes)
                 
                 # 获取对应的hash（如果有）
                 image_hash = hashes_list[index] if index < len(hashes_list) else None

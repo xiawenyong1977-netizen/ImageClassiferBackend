@@ -5,7 +5,7 @@
 
 from PIL import Image
 import io
-from typing import Tuple
+from typing import Tuple, Optional
 from app.config import settings
 
 
@@ -34,6 +34,10 @@ class ImageUtils:
             img = Image.open(io.BytesIO(image_bytes))
             format_lower = img.format.lower() if img.format else ""
             
+            # MPO格式特殊处理：允许MPO格式，但需要转换为JPEG
+            if format_lower == "mpo":
+                return True, ""
+            
             if format_lower not in settings.allowed_formats_list:
                 allowed = ", ".join(settings.allowed_formats_list)
                 return False, f"不支持的图片格式：{img.format}，支持的格式：{allowed}"
@@ -42,6 +46,71 @@ class ImageUtils:
             
         except Exception as e:
             return False, f"无效的图片文件：{str(e)}"
+    
+    @staticmethod
+    def convert_mpo_to_jpeg(image_bytes: bytes) -> Optional[bytes]:
+        """
+        将MPO格式图片转换为JPEG格式
+        MPO（Multi Picture Object）通常包含两张图片，提取第一张并转换为JPEG
+        
+        Args:
+            image_bytes: MPO格式的图片二进制数据
+            
+        Returns:
+            转换后的JPEG格式图片数据，如果转换失败返回None
+        """
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            format_lower = img.format.lower() if img.format else ""
+            
+            # 如果不是MPO格式，直接返回原数据
+            if format_lower != "mpo":
+                return image_bytes
+            
+            # MPO格式通常包含多张图片，提取第一张
+            # 确保图片是RGB模式
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            # 转换为JPEG
+            output = io.BytesIO()
+            img.save(output, format='JPEG', quality=95, optimize=True)
+            return output.getvalue()
+            
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"MPO格式转换失败: {e}")
+            return None
+    
+    @staticmethod
+    def normalize_image_format(image_bytes: bytes) -> bytes:
+        """
+        标准化图片格式，将特殊格式（如MPO）转换为标准格式（JPEG）
+        
+        Args:
+            image_bytes: 原始图片二进制数据
+            
+        Returns:
+            标准化后的图片数据
+        """
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            format_lower = img.format.lower() if img.format else ""
+            
+            # 如果是MPO格式，转换为JPEG
+            if format_lower == "mpo":
+                converted = ImageUtils.convert_mpo_to_jpeg(image_bytes)
+                if converted:
+                    return converted
+                # 如果转换失败，返回原数据
+                return image_bytes
+            
+            # 其他格式直接返回
+            return image_bytes
+            
+        except Exception:
+            # 如果无法识别格式，返回原数据
+            return image_bytes
     
     @staticmethod
     def get_image_info(image_bytes: bytes) -> dict:
