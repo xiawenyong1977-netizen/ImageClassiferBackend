@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS `image_classification_cache` (
   `category` VARCHAR(50) NOT NULL COMMENT '分类Key（8个预定义类别之一）',
   `confidence` DECIMAL(5,4) NOT NULL COMMENT '置信度(0-1)',
   `description` TEXT DEFAULT NULL COMMENT '图片描述',
+  `background_color` VARCHAR(20) DEFAULT NULL COMMENT '背景颜色（橙色、蓝色、红色、绿色、紫色、粉色、黄色、灰色、黑色、白色）',
   
   -- 模型信息
   `model_used` VARCHAR(50) NOT NULL COMMENT '使用的模型',

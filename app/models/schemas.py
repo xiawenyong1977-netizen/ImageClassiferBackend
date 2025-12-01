@@ -29,6 +29,7 @@ class ClassificationData(BaseModel):
     category: str = Field(..., description="分类类别Key（使用本地推理时为空，需客户端映射）")
     confidence: float = Field(..., description="置信度", ge=0, le=1)
     description: Optional[str] = Field(None, description="图片描述")
+    background_color: Optional[str] = Field(None, description="背景颜色（橙色、蓝色、红色、绿色、紫色、粉色、黄色、灰色、黑色、白色）")
     local_inference_result: Optional[dict] = Field(None, description="本地推理原始结果（如果使用本地推理）")
 
 

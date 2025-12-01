@@ -100,7 +100,8 @@ class ClassifierService:
             result = {
                 "category": cached_result['category'],
                 "confidence": float(cached_result['confidence']),
-                "description": cached_result.get('description')
+                "description": cached_result.get('description'),
+                "background_color": cached_result.get('background_color')
             }
             
             return result, True, request_id
@@ -144,6 +145,7 @@ class ClassifierService:
                         "category": cached_result['category'],
                         "confidence": float(cached_result['confidence']),
                         "description": cached_result.get('description'),
+                        "background_color": cached_result.get('background_color'),
                         "local_inference_result": cached_result.get('local_inference_result')
                     }
                 })
@@ -212,7 +214,8 @@ class ClassifierService:
             result = {
                 "category": cached_result['category'],
                 "confidence": float(cached_result['confidence']),
-                "description": cached_result.get('description')
+                "description": cached_result.get('description'),
+                "background_color": cached_result.get('background_color')
             }
             
             logger.info(f"缓存命中 [{request_id}]: {result['category']} ({processing_time}ms)")
@@ -299,6 +302,7 @@ class ClassifierService:
                 category=model_result['category'],
                 confidence=model_result['confidence'],
                 description=model_result.get('description'),
+                background_color=model_result.get('background_color'),
                 model_used=f"{settings.LLM_MODEL}_{inference_method}"
             )
             logger.info(f"分类结果已缓存: {model_result['category']}")

@@ -28,6 +28,7 @@ class CacheService:
                     category,
                     confidence,
                     description,
+                    background_color,
                     model_used,
                     hit_count,
                     created_at
@@ -49,7 +50,7 @@ class CacheService:
             return None
     
     async def save_result(self, image_hash: str, category: str, confidence: float,
-                         description: Optional[str], model_used: str) -> bool:
+                         description: Optional[str], background_color: Optional[str], model_used: str) -> bool:
         """
         保存分类结果到缓存
         
@@ -58,6 +59,7 @@ class CacheService:
             category: 分类类别
             confidence: 置信度
             description: 描述
+            background_color: 背景颜色
             model_used: 使用的模型
             
         Returns:
@@ -65,18 +67,27 @@ class CacheService:
         """
         try:
             async with db.get_cursor() as cursor:
+                # 使用 INSERT ... ON DUPLICATE KEY UPDATE 处理并发插入
                 sql = """
                 INSERT INTO image_classification_cache 
-                (image_hash, category, confidence, description, model_used, hit_count)
-                VALUES (%s, %s, %s, %s, %s, 1)
+                (image_hash, category, confidence, description, background_color, model_used, hit_count)
+                VALUES (%s, %s, %s, %s, %s, %s, 1)
+                ON DUPLICATE KEY UPDATE
+                    hit_count = hit_count + 1,
+                    last_hit_at = NOW()
                 """
                 await cursor.execute(sql, (
-                    image_hash, category, confidence, description, model_used
+                    image_hash, category, confidence, description, background_color, model_used
                 ))
                 logger.info(f"缓存已保存: {image_hash[:16]}... -> {category}")
                 return True
                 
         except Exception as e:
+            # 如果是重复键错误，记录为警告而不是错误（这是正常的并发情况）
+            error_str = str(e)
+            if "Duplicate entry" in error_str or "1062" in error_str:
+                logger.debug(f"缓存已存在（并发插入）: {image_hash[:16]}...")
+                return True  # 视为成功，因为记录已存在
             logger.error(f"保存缓存失败: {e}")
             return False
     

@@ -26,6 +26,12 @@ class ModelClient:
         "other"               # 其它
     ]
     
+    # 预定义的背景颜色
+    BACKGROUND_COLORS = [
+        "橙色", "蓝色", "红色", "绿色", "紫色",
+        "粉色", "黄色", "灰色", "黑色", "白色"
+    ]
+    
     def __init__(self):
         self.provider = settings.LLM_PROVIDER
         self.api_key = settings.LLM_API_KEY
@@ -43,7 +49,8 @@ class ModelClient:
             {
                 "category": str,
                 "confidence": float,
-                "description": str
+                "description": str,
+                "background_color": str
             }
         """
         try:
@@ -118,7 +125,8 @@ class ModelClient:
             return {
                 "category": "other",
                 "confidence": 0.5,
-                "description": "dashscope SDK未安装"
+                "description": "dashscope SDK未安装",
+                "background_color": None
             }
         except Exception as e:
             logger.error(f"阿里云API调用失败: {e}")
@@ -126,7 +134,8 @@ class ModelClient:
             return {
                 "category": "other",
                 "confidence": 0.5,
-                "description": f"分类失败: {str(e)}"
+                "description": f"分类失败: {str(e)}",
+                "background_color": None
             }
     
     async def _classify_with_openai(self, image_bytes: bytes) -> Dict:
@@ -176,7 +185,8 @@ class ModelClient:
             return {
                 "category": "other",
                 "confidence": 0.5,
-                "description": "分类失败，使用默认类别"
+                "description": "分类失败，使用默认类别",
+                "background_color": None
             }
     
     async def _classify_with_claude(self, image_bytes: bytes) -> Dict:
@@ -231,7 +241,8 @@ class ModelClient:
             return {
                 "category": "other",
                 "confidence": 0.5,
-                "description": "分类失败，使用默认类别"
+                "description": "分类失败，使用默认类别",
+                "background_color": None
             }
     
     def _build_prompt(self) -> str:
@@ -258,14 +269,25 @@ class ModelClient:
             # 尝试从文本中提取JSON
             json_match = re.search(r'\{[^}]+\}', content, re.DOTALL)
             if json_match:
-                result = json.loads(json_match.group())
+                try:
+                    result = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    # 正则提取的JSON也无法解析，返回默认值
+                    logger.warning(f"无法解析响应（正则提取后仍失败）: {content}")
+                    return {
+                        "category": "other",
+                        "confidence": 0.5,
+                        "description": "无法解析分类结果",
+                        "background_color": None
+                    }
             else:
                 # 解析失败，返回默认值
                 logger.warning(f"无法解析响应: {content}")
                 return {
                     "category": "other",
                     "confidence": 0.5,
-                    "description": "无法解析分类结果"
+                    "description": "无法解析分类结果",
+                    "background_color": None
                 }
         
         # 验证category是否在预定义列表中
@@ -274,10 +296,17 @@ class ModelClient:
             logger.warning(f"无效的类别: {category}，使用默认类别")
             category = "other"
         
+        # 验证background_color是否在预定义列表中
+        background_color = result.get("background_color")
+        if background_color and background_color not in self.BACKGROUND_COLORS:
+            logger.warning(f"无效的背景颜色: {background_color}，设为None")
+            background_color = None
+        
         return {
             "category": category,
             "confidence": float(result.get("confidence", 0.5)),
-            "description": result.get("description", "")
+            "description": result.get("description", ""),
+            "background_color": background_color
         }
 
 
