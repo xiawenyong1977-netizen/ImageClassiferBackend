@@ -553,12 +553,23 @@ async def wechat_message_handler(request: Request):
                     await conn.commit()
             
             # 返回欢迎消息
+            welcome_message = """这里是AI结对编程的实践现场。
+
+📌 你会看到：
+• 🤖 AI辅助编程实战
+• 🛠️ 工具链优化心得
+• 📸 芯图相册迭代故事
+• 💡 人机协作思考
+
+这不是教程，而是真实的开发日记。每个功能都是与AI搭档共同完成的"编程双人舞"。
+
+欢迎同行者，一起见证开发方式的变革。"""
             reply = f"""<xml>
 <ToUserName><![CDATA[{from_user}]]></ToUserName>
 <FromUserName><![CDATA[{to_user}]]></FromUserName>
 <CreateTime>{int(time.time())}</CreateTime>
 <MsgType><![CDATA[text]]></MsgType>
-<Content><![CDATA[欢迎关注！您已获得10张图片编辑额度。]]></Content>
+<Content><![CDATA[{welcome_message}]]></Content>
 </xml>"""
             return PlainTextResponse(content=reply)
         
@@ -706,7 +717,7 @@ async def get_wechat_menu():
 async def create_wechat_menu():
     """
     创建微信公众号菜单
-    一级菜单：芯图相册、会员服务
+    一级菜单：芯图相册、会员服务、联系我们
     会员服务二级菜单：开通会员、购买额度、额度查询
     """
     try:
@@ -764,6 +775,9 @@ async def create_wechat_menu():
         # 芯图相册直接跳转URL（不需要授权）
         xintu_url = "https://www.xintuxiangce.top"
         
+        # 联系我们URL（不需要授权）
+        contact_url = "https://www.xintuxiangce.top/aifuture.html"
+        
         menu_data = {
             "button": [
                 {
@@ -790,6 +804,11 @@ async def create_wechat_menu():
                             "url": credits_info_url
                         }
                     ]
+                },
+                {
+                    "type": "view",
+                    "name": "联系我们",
+                    "url": contact_url
                 }
             ]
         }

@@ -46,6 +46,22 @@ class StatsService:
         
         try:
             async with db.get_cursor() as cursor:
+                # 如果 openid 为空但 client_id 不为空，尝试从绑定表查询 openid
+                resolved_openid = openid
+                if not resolved_openid and client_id:
+                    try:
+                        await cursor.execute("""
+                            SELECT openid FROM wechat_qrcode_bindings 
+                            WHERE client_id = %s AND openid IS NOT NULL 
+                            LIMIT 1
+                        """, (client_id,))
+                        binding_result = await cursor.fetchone()
+                        if binding_result:
+                            resolved_openid = binding_result.get('openid')
+                            logger.debug(f"通过 client_id={client_id} 查询到 openid={resolved_openid}")
+                    except Exception as e:
+                        logger.warning(f"查询 openid 失败 (client_id={client_id}): {e}")
+                
                 sql = """
                 INSERT INTO unified_request_log (
                     request_id, request_type, ip_address, client_id, openid,
@@ -61,7 +77,7 @@ class StatsService:
                 logger.info(f"记录统一请求日志 [{request_id}]: type={request_type}, total={total_images}, cached={cached_count}, llm={llm_count}, local={local_count}")
                 
                 await cursor.execute(sql, (
-                    request_id, request_type, ip_address, client_id, openid,
+                    request_id, request_type, ip_address, client_id, resolved_openid,
                     total_images, cached_count, llm_count, local_count
                 ))
                 logger.debug(f"统一请求日志已记录: {request_id} [{request_type}]")
@@ -108,12 +124,13 @@ class StatsService:
         try:
             async with db.get_cursor() as cursor:
                 # 显式设置 created_at 确保生成列正确计算
+                # 使用 NOW() 确保日期有效，避免 '0000-00-00' 错误
                 sql = """
                 INSERT INTO request_log (
                     request_id, user_id, ip_address, image_hash, image_size,
                     category, confidence, from_cache, processing_time_ms, inference_method,
                     created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(NOW(), CURRENT_TIMESTAMP))
                 """
                 await cursor.execute(sql, (
                     request_id, user_id, ip_address, image_hash, image_size,
@@ -123,6 +140,29 @@ class StatsService:
                 return True
                 
         except Exception as e:
+            # 如果是日期错误，尝试使用更明确的时间戳
+            error_str = str(e)
+            if "Incorrect date value" in error_str or "0000-00-00" in error_str:
+                try:
+                    from datetime import datetime
+                    async with db.get_cursor() as cursor:
+                        sql = """
+                        INSERT INTO request_log (
+                            request_id, user_id, ip_address, image_hash, image_size,
+                            category, confidence, from_cache, processing_time_ms, inference_method,
+                            created_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """
+                        await cursor.execute(sql, (
+                            request_id, user_id, ip_address, image_hash, image_size,
+                            category, confidence, 1 if from_cache else 0, processing_time_ms, inference_method,
+                            datetime.now()
+                        ))
+                        logger.debug(f"请求日志已记录（使用datetime）: {request_id}")
+                        return True
+                except Exception as retry_error:
+                    logger.error(f"记录请求日志失败（重试后）: {retry_error}")
+                    return False
             logger.error(f"记录请求日志失败: {e}")
             return False
     
@@ -143,19 +183,21 @@ class StatsService:
             async with db.get_cursor() as cursor:
                 # 使用统一日志表，一个查询搞定所有统计
                 # 独立用户统计逻辑：
-                # 1. 先从统一日志表获取所有唯一的 client_id
-                # 2. 通过 wechat_qrcode_bindings 表将 client_id 映射到 openid
-                # 3. 如果有 openid 就用 openid，没有就保留 client_id
-                # 4. 最后对这个集合去重统计
+                # 1. 优先使用 openid（如果日志中已记录）
+                # 2. 其次通过 wechat_qrcode_bindings 表将 client_id 映射到 openid
+                # 3. 如果没有 openid 但有 client_id，使用 client_id
+                # 4. 如果都没有，使用 ip_address 作为备选标识（匿名用户）
                 await cursor.execute("""
                     SELECT 
                         -- 独立IP个数
                         COUNT(DISTINCT ip_address) as unique_ips,
                         
-                        -- 用户数（基于 client_id，通过绑定表映射到 openid）
+                        -- 用户数（优先使用 openid，其次 binding.openid，再 client_id，最后 ip_address）
                         COUNT(DISTINCT COALESCE(
+                            log.openid,
                             binding.openid,
-                            log.client_id
+                            log.client_id,
+                            log.ip_address
                         )) as unique_users,
                         
                         -- 图片分类统计（包括单个分类、批量分类、单个缓存查询、批量缓存查询）
@@ -194,14 +236,33 @@ class StatsService:
                         SUM(total_images) as total_images,
                         SUM(COALESCE(cached_count, 0)) as cached_count,
                         SUM(COALESCE(llm_count, 0)) as llm_count,
-                        SUM(COALESCE(local_count, 0)) as local_count
+                        SUM(COALESCE(local_count, 0)) as local_count,
+                        SUM(total_images) - SUM(COALESCE(cached_count, 0)) - SUM(COALESCE(llm_count, 0)) - SUM(COALESCE(local_count, 0)) as diff
                     FROM unified_request_log
                     WHERE created_date = CURDATE()
                       AND request_type IN ('single_classify', 'batch_classify', 'single_cache', 'batch_cache')
                     GROUP BY request_type
                 """)
                 detail_stats = await cursor.fetchall()
-                logger.debug(f"今日分类统计详情: {detail_stats}")
+                logger.info(f"📊 今日分类统计详情（按类型）: {detail_stats}")
+                
+                # 检查数据一致性
+                if detail_stats:
+                    for stat in detail_stats:
+                        request_type = stat.get('request_type')
+                        total = stat.get('total_images', 0) or 0
+                        cached = stat.get('cached_count', 0) or 0
+                        llm = stat.get('llm_count', 0) or 0
+                        local = stat.get('local_count', 0) or 0
+                        diff = stat.get('diff', 0) or 0
+                        total_processed = cached + llm + local
+                        
+                        # 对于分类请求，total应该等于cached+llm+local
+                        if request_type in ('single_classify', 'batch_classify') and total != total_processed:
+                            logger.warning(f"⚠️ {request_type} 数据不一致: total={total}, cached={cached}, llm={llm}, local={local}, 差值={diff}")
+                        # 对于缓存查询，total应该等于cached+miss（miss不会计入llm/local）
+                        elif request_type in ('single_cache', 'batch_cache') and diff != 0:
+                            logger.info(f"ℹ️ {request_type} 未命中数: {diff} (这是正常的，缓存查询未命中不会触发推理)")
                 
                 if result:
                     # 确保所有值都转换为正确的数字类型（处理 decimal.Decimal）
