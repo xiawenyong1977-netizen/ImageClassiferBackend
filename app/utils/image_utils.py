@@ -33,11 +33,14 @@ class ImageUtils:
         try:
             img = Image.open(io.BytesIO(image_bytes))
             format_lower = img.format.lower() if img.format else ""
+            format_upper = img.format.upper() if img.format else ""
             
-            # MPO格式特殊处理：允许MPO格式，但需要转换为JPEG
-            if format_lower == "mpo":
+            # MPO格式特殊处理：始终允许MPO格式（无论配置中是否包含）
+            # MPO (Multi Picture Object) 是某些相机（如iPhone）使用的格式
+            if format_lower == "mpo" or format_upper == "MPO":
                 return True, ""
             
+            # 检查是否在允许的格式列表中
             if format_lower not in settings.allowed_formats_list:
                 allowed = ", ".join(settings.allowed_formats_list)
                 return False, f"不支持的图片格式：{img.format}，支持的格式：{allowed}"

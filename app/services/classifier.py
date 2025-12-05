@@ -5,6 +5,7 @@
 """
 
 import time
+import io
 from typing import Optional, Tuple, List
 from app.utils.hash_utils import HashUtils
 from app.utils.id_generator import IDGenerator
@@ -13,6 +14,15 @@ from app.services.model_client import model_client
 from app.services.stats_service import stats_service
 from app.config import settings
 from loguru import logger
+
+# 二维码检测相关导入
+try:
+    from pyzbar.pyzbar import decode as pyzbar_decode
+    from PIL import Image
+    QRCODE_DETECTION_AVAILABLE = True
+except ImportError:
+    QRCODE_DETECTION_AVAILABLE = False
+    logger.warning("pyzbar 或 PIL 未安装，二维码检测功能不可用")
 
 # 延迟导入本地推理服务（避免循环依赖）
 _local_inference = None
@@ -53,6 +63,41 @@ class ClassifierService:
             return False
         
         return True
+    
+    def _detect_qrcode(self, image_bytes: bytes) -> bool:
+        """
+        检测图片是否包含二维码（快速检测，失败则交给大模型）
+        
+        Args:
+            image_bytes: 图片二进制数据
+            
+        Returns:
+            是否包含二维码
+        """
+        if not QRCODE_DETECTION_AVAILABLE:
+            return False
+            
+        try:
+            # 使用PIL加载图片
+            img = Image.open(io.BytesIO(image_bytes))
+            
+            # 转换为RGB模式（pyzbar需要）
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            # 直接检测
+            decoded_objects = pyzbar_decode(img)
+            if len(decoded_objects) > 0:
+                logger.info(f"✅ 检测到二维码: {len(decoded_objects)} 个")
+                return True
+            
+            # 检测失败，返回False（交给大模型处理）
+            return False
+            
+        except Exception as e:
+            # 检测异常，返回False（不阻塞流程，交给大模型处理）
+            logger.debug(f"二维码检测异常: {e}")
+            return False
     
     async def classify_by_hash(
         self,
@@ -221,7 +266,42 @@ class ClassifierService:
             logger.info(f"缓存命中 [{request_id}]: {result['category']} ({processing_time}ms)")
             return result, True, request_id, processing_time, "cache"
         
-        # 缓存未命中，根据配置选择推理方式
+        # 🆕 缓存未命中，先检测二维码
+        logger.info(f"🔍 开始二维码检测 [{request_id}], 图片大小: {image_size} 字节, QRCODE_DETECTION_AVAILABLE={QRCODE_DETECTION_AVAILABLE}")
+        has_qrcode = self._detect_qrcode(image_bytes)
+        logger.info(f"🔍 二维码检测结果 [{request_id}]: {has_qrcode}")
+        if has_qrcode:
+            logger.info(f"检测到二维码 [{request_id}]，跳过推理，直接返回qrcode分类")
+            
+            # 构造二维码分类结果（和本地推理不同，二维码可以直接返回category）
+            qrcode_result = {
+                "category": "qrcode",
+                "confidence": 1.0,
+                "description": "检测到二维码",
+                "background_color": None
+            }
+            
+            processing_time = int((time.time() - start_time) * 1000)
+            
+            # 记录日志（inference_method 使用 qrcode_detection，统计时算作 local_count）
+            await stats_service.log_request(
+                request_id=request_id,
+                user_id=user_id,
+                ip_address=ip_address,
+                image_hash=image_hash,
+                image_size=image_size,
+                category=qrcode_result['category'],
+                confidence=qrcode_result['confidence'],
+                from_cache=False,
+                processing_time_ms=processing_time,
+                inference_method="qrcode_detection"
+            )
+            
+            logger.info(f"二维码检测完成 [{request_id}]: qrcode ({processing_time}ms)")
+            # 🆕 注意：不缓存，和本地推理保持一致
+            return qrcode_result, False, request_id, processing_time, "qrcode_detection"
+        
+        # 缓存未命中且未检测到二维码，根据配置选择推理方式
         model_result = None
         inference_method = "unknown"
         
@@ -248,13 +328,9 @@ class ClassifierService:
                     raise Exception("本地推理失败")
             except Exception as e:
                 logger.error(f"本地推理失败: {e}")
-                # 如果本地推理失败，尝试大模型
-                if settings.LOCAL_INFERENCE_FALLBACK:
-                    logger.warning(f"本地推理失败，降级到大模型 [{request_id}]")
-                    model_result = await model_client.classify_image(image_bytes)
-                    inference_method = "llm_fallback"
-                else:
-                    raise
+                # 本地推理失败时，直接抛出异常，不降级到大模型
+                # 避免循环降级：本地推理失败 -> 大模型 -> 大模型失败 -> 本地推理 -> 循环
+                raise Exception(f"本地推理失败: {str(e)}")
         
         # 策略2：优先大模型，失败时降级到本地推理
         else:
@@ -306,8 +382,8 @@ class ClassifierService:
                 model_used=f"{settings.LLM_MODEL}_{inference_method}"
             )
             logger.info(f"分类结果已缓存: {model_result['category']}")
-        elif inference_method in ["local", "local_fallback"]:
-            logger.info(f"本地推理结果不缓存（需客户端映射）")
+        elif inference_method in ["local", "local_fallback", "qrcode_detection"]:
+            logger.info(f"本地推理/二维码检测结果不缓存")
         else:
             logger.warning(f"分类失败，不缓存此结果: {model_result.get('description')}")
         

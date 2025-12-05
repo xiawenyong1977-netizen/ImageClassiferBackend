@@ -15,6 +15,9 @@ pydantic-settings==2.1.0
 # 图片处理
 Pillow==10.2.0
 
+# 二维码检测
+pyzbar==0.1.9
+
 # ONNX Runtime (本地模型推理)
 onnxruntime==1.16.3
 numpy==1.24.3

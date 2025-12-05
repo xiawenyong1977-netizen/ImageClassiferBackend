@@ -44,8 +44,10 @@ async def submit_edit(
     try:
         # 检查数量
         if len(images) == 0:
+            logger.warning(f"批量编辑-图片数量为0")
             raise HTTPException(status_code=400, detail="至少需要1张图片")
         if len(images) > 9:
+            logger.warning(f"批量编辑-图片数量超限: 上传={len(images)}, 最大=9")
             raise HTTPException(status_code=400, detail="最多9张图片")
         
         # 1. 确定openid（支持client_id或x_wechat_openid）。
@@ -55,20 +57,24 @@ async def submit_edit(
         
         if not openid and id_for_binding:
             # 通过client_id（或X-User-ID）查询openid（以是否存在openid为完成判定）
-            async with db.get_connection() as conn:
-                async with conn.cursor(aiomysql.DictCursor) as cursor:
-                    await cursor.execute(
-                        """SELECT openid FROM wechat_qrcode_bindings 
-                               WHERE client_id = %s AND openid IS NOT NULL 
-                               ORDER BY completed_at DESC, id DESC LIMIT 1""",
-                        (id_for_binding,)
-                    )
-                    binding = await cursor.fetchone()
-                    if binding and binding['openid']:
-                        openid = binding['openid']
-                        logger.info(f"通过client_id获取openid: {openid[:16]}...")
-                    else:
-                        logger.info(f"未通过绑定找到openid，client_id={id_for_binding} (form_client_id={client_id}, header_x_user_id={x_user_id})")
+            try:
+                async with db.get_connection() as conn:
+                    async with conn.cursor(aiomysql.DictCursor) as cursor:
+                        await cursor.execute(
+                            """SELECT openid FROM wechat_qrcode_bindings 
+                                   WHERE client_id = %s AND openid IS NOT NULL 
+                                   ORDER BY completed_at DESC, id DESC LIMIT 1""",
+                            (id_for_binding,)
+                        )
+                        binding = await cursor.fetchone()
+                        if binding and binding['openid']:
+                            openid = binding['openid']
+                            logger.info(f"通过client_id获取openid: {openid[:16]}...")
+                        else:
+                            logger.info(f"未通过绑定找到openid，client_id={id_for_binding} (form_client_id={client_id}, header_x_user_id={x_user_id})")
+            except Exception as e:
+                logger.error(f"批量编辑-查询openid绑定失败: client_id={id_for_binding}, error={e}")
+                # 继续执行，后面会检查openid
         
         # 2. 必须拿到openid，否则拒绝处理（确保能正确扣减额度）
         if not openid:
@@ -77,43 +83,62 @@ async def submit_edit(
 
         # 3. 先查询用户剩余额度
         from app.services.credit_service import credit_service
-        async with db.get_connection() as conn:
-            async with conn.cursor(aiomysql.DictCursor) as cursor:
-                await cursor.execute(
-                    "SELECT remaining_credits FROM wechat_users WHERE openid = %s",
-                    (openid,)
-                )
-                user = await cursor.fetchone()
-                if user:
-                    remaining = user['remaining_credits'] or 0
-                    if remaining < len(images):
-                        raise HTTPException(
-                            status_code=400, 
-                            detail=f"额度不足：剩余{remaining}张，需要{len(images)}张"
-                        )
+        try:
+            async with db.get_connection() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cursor:
+                    await cursor.execute(
+                        "SELECT remaining_credits FROM wechat_users WHERE openid = %s",
+                        (openid,)
+                    )
+                    user = await cursor.fetchone()
+                    if user:
+                        remaining = user['remaining_credits'] or 0
+                        if remaining < len(images):
+                            logger.warning(f"批量编辑-额度不足: openid={openid[:16]}..., 剩余={remaining}, 需要={len(images)}")
+                            raise HTTPException(
+                                status_code=400, 
+                                detail=f"额度不足：剩余{remaining}张，需要{len(images)}张"
+                            )
+                    else:
+                        logger.warning(f"批量编辑-用户不存在: openid={openid[:16] if openid else None}...")
+                        raise HTTPException(status_code=400, detail="用户不存在")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"批量编辑-查询用户额度失败: openid={openid[:16] if openid else None}..., error={e}")
+            raise HTTPException(status_code=500, detail=f"查询用户额度失败: {str(e)}")
         
         # 4. 读取图片
         image_data = []
-        for img in images:
-            bytes = await img.read()
-            image_data.append({
-                'filename': img.filename,
-                'bytes': bytes
-            })
+        for idx, img in enumerate(images):
+            try:
+                bytes = await img.read()
+                image_data.append({
+                    'filename': img.filename,
+                    'bytes': bytes
+                })
+            except Exception as e:
+                logger.error(f"批量编辑-读取图片{idx}失败: filename={img.filename}, error={e}")
+                raise HTTPException(status_code=400, detail=f"读取图片失败: {img.filename}")
         
         # 5. 解析参数
         try:
             params = json.loads(edit_params)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            logger.warning(f"批量编辑-参数格式错误: edit_params={edit_params[:100] if edit_params else None}, error={e}")
             raise HTTPException(status_code=400, detail="编辑参数格式错误")
         
         # 6. 获取IP地址
         ip_address = request.client.host if request else None
         
         # 7. 提交任务（异步处理，立即返回）
-        task_id = await image_editor.submit_task_async(
-            image_data, edit_type, params, x_user_id, openid, ip_address
-        )
+        try:
+            task_id = await image_editor.submit_task_async(
+                image_data, edit_type, params, x_user_id, openid, ip_address
+            )
+        except Exception as e:
+            logger.error(f"批量编辑-提交任务失败: 图片数={len(images)}, edit_type={edit_type}, error={e}")
+            raise HTTPException(status_code=500, detail=f"提交任务失败: {str(e)}")
         
         # 8. 预估时间（使用原图，约18秒/张）
         batch_count = (len(images) + 2) // 3  # 向上取整
@@ -131,7 +156,7 @@ async def submit_edit(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"提交任务失败: {e}")
+        logger.error(f"批量编辑-提交任务失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -17,13 +17,13 @@ router = APIRouter(prefix="/api/v1/config", tags=["config"])
 class InferenceConfigUpdate(BaseModel):
     """推理配置更新"""
     use_local_inference: Optional[bool] = Field(None, description="是否使用本地推理")
-    local_inference_fallback: Optional[bool] = Field(None, description="大模型失败时是否降级")
+    local_inference_fallback: Optional[bool] = Field(None, description="大模型失败时是否降级到本地推理")
 
 
 class InferenceConfigResponse(BaseModel):
     """推理配置响应"""
     use_local_inference: bool = Field(..., description="是否使用本地推理")
-    local_inference_fallback: bool = Field(..., description="大模型失败时是否降级")
+    local_inference_fallback: bool = Field(..., description="大模型失败时是否降级到本地推理")
 
 
 @router.get("/inference", response_model=InferenceConfigResponse, summary="获取推理配置")

@@ -67,12 +67,13 @@ class Settings(BaseSettings):
         "travel_scenery",     # 旅行风景
         "screenshot",         # 手机截图
         "idcard",             # 证件照
+        "qrcode",             # 二维码
         "other"               # 其它
     ]
     
     # ===== 提示词配置 =====
     CLASSIFICATION_PROMPT: str = Field(
-        default="""请对这张图片进行分类。你必须从以下8个类别中选择一个：
+        default="""请对这张图片进行分类。你必须从以下9个类别中选择一个：
 
 1. social_activities - 社交活动（聚会、合影、多人互动场景）
 2. pets - 宠物萌照（猫、狗等宠物照片）
@@ -81,14 +82,17 @@ class Settings(BaseSettings):
 5. travel_scenery - 旅行风景（旅游景点、自然风光、城市风景）
 6. screenshot - 手机截图（手机屏幕截图、应用界面）
 7. idcard - 证件照（身份证、护照、驾照等证件）
-8. other - 其它（无法归类到上述类别）
+8. qrcode - 二维码（只要照片中含有二维码，无论是否还有其他内容，都必须分类为qrcode）
+9. other - 其它（无法归类到上述类别）
+
+重要：如果图片中包含二维码（QR码），无论图片中是否还有其他内容，都必须分类为 qrcode。
 
 同时，请识别照片背景的主要颜色。背景颜色必须从以下10种颜色中选择一个：
 橙色、蓝色、红色、绿色、紫色、粉色、黄色、灰色、黑色、白色
 
 请以JSON格式返回结果：
 {
-    "category": "类别key（必须是上述8个之一）",
+    "category": "类别key（必须是上述9个之一）",
     "confidence": 0.95,
     "description": "简短描述图片内容（可选，中文，30字以内）",
     "background_color": "背景颜色（必须是：橙色、蓝色、红色、绿色、紫色、粉色、黄色、灰色、黑色、白色之一）"
