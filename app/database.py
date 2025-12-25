@@ -40,9 +40,20 @@ class Database:
     async def disconnect(self):
         """关闭数据库连接池"""
         if self.pool:
-            self.pool.close()
-            await self.pool.wait_closed()
-            logger.info("数据库连接池已关闭")
+            try:
+                self.pool.close()
+                await self.pool.wait_closed()
+                logger.info("数据库连接池已关闭")
+            except (RuntimeError, Exception) as e:
+                # 如果事件循环已关闭或其他错误，只关闭连接池，不等待
+                error_msg = str(e).lower()
+                if "event loop is closed" in error_msg or "cannot be called from a running event loop" in error_msg:
+                    self.pool.close()
+                    logger.warning("数据库连接池已关闭（事件循环已关闭）")
+                else:
+                    # 其他错误也尝试关闭连接池，但不抛出异常
+                    self.pool.close()
+                    logger.warning(f"数据库连接池关闭时出现错误（已忽略）: {e}")
     
     @asynccontextmanager
     async def get_connection(self):
