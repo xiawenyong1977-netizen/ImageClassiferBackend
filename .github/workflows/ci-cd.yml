@@ -2,10 +2,7 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches:
-      - main
-      - master
-      - develop
+    # 所有分支push时都触发测试（部署任务仍只在main/master分支触发）
   pull_request:
     branches:
       - main
