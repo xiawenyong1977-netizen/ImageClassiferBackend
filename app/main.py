@@ -94,6 +94,11 @@ app.include_router(release.router)  # 发行版本上传
 app.include_router(stats.router)
 app.include_router(health.router)
 app.include_router(location.router)
+try:
+    from app.api import location_v2
+    app.include_router(location_v2.router)  # 地理位置API v2版本
+except ImportError:
+    logger.warning("location_v2模块导入失败，v2接口不可用")
 app.include_router(image_edit.router)  # 图像编辑
 app.include_router(payment.router)  # 支付功能
 

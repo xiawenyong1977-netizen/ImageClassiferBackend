@@ -143,6 +143,21 @@ class Settings(BaseSettings):
         description="图像编辑结果图片的基础URL（新服务器域名）"
     )
     
+    # ===== 地理位置API配置 =====
+    GAODE_API_KEY: str = Field(default="", description="高德地图API密钥")
+    GAODE_API_URL: str = Field(
+        default="https://restapi.amap.com/v3/geocode/regeo",
+        description="高德地图逆地理编码API地址"
+    )
+    NOMINATIM_API_URL: str = Field(
+        default="https://nominatim.openstreetmap.org/reverse",
+        description="Nominatim逆地理编码API地址"
+    )
+    NOMINATIM_RATE_LIMIT: float = Field(
+        default=1.0,
+        description="Nominatim API调用频率限制（秒/请求）"
+    )
+    
     JWT_ALGORITHM: str = Field(default="HS256", description="JWT算法")
     JWT_ACCESS_TOKEN_EXPIRE_DAYS: int = Field(default=1, description="Token过期天数")
     
