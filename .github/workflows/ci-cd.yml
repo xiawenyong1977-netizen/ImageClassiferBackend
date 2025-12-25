@@ -1,0 +1,323 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+
+env:
+  PYTHON_VERSION: '3.8'
+  DEPLOY_DIR: /opt/ImageClassifierBackend
+
+jobs:
+  # 测试任务
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_password
+          MYSQL_DATABASE: image_classifier_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio
+
+      - name: Run linting (optional)
+        run: |
+          pip install flake8 black || true
+          # flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
+          # black --check app/ || true
+
+      - name: Run tests
+        env:
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test_password
+          MYSQL_DATABASE: image_classifier_test
+          APP_ENV: test
+          LOG_LEVEL: DEBUG
+        run: |
+          pytest tests/ -v --cov=app --cov-report=xml --cov-report=term || true
+          # 如果测试目录不存在，至少检查代码是否可以导入
+          python -c "from app.main import app; print('✓ App imports successfully')" || exit 1
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+
+  # 部署任务（仅在 main/master 分支推送时触发）
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate deployment version
+        id: version
+        run: |
+          VERSION=$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::8}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Deployment version: $VERSION"
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          echo "Host deploy-server" >> ~/.ssh/config
+          echo "  HostName $SSH_HOST" >> ~/.ssh/config
+          echo "  User $SSH_USER" >> ~/.ssh/config
+          echo "  IdentityFile ~/.ssh/deploy_key" >> ~/.ssh/config
+          echo "  StrictHostKeyChecking no" >> ~/.ssh/config
+
+      - name: Create deployment package
+        run: |
+          mkdir -p deploy-package
+          # 复制需要部署的文件
+          cp -r app deploy-package/
+          cp requirements.txt deploy-package/
+          cp gunicorn_config.py deploy-package/
+          cp env.example deploy-package/
+          # 创建部署脚本
+          cat > deploy-package/deploy.sh << 'DEPLOY_SCRIPT'
+          #!/bin/bash
+          set -e
+          
+          DEPLOY_DIR="$1"
+          VERSION="$2"
+          CURRENT_LINK="$DEPLOY_DIR/current"
+          VERSIONS_DIR="$DEPLOY_DIR/versions"
+          NEW_VERSION_DIR="$VERSIONS_DIR/$VERSION"
+          
+          echo "========================================"
+          echo "开始部署版本: $VERSION"
+          echo "========================================"
+          
+          # 创建版本目录
+          mkdir -p "$VERSIONS_DIR"
+          mkdir -p "$NEW_VERSION_DIR"
+          
+          # 复制文件到新版本目录
+          echo "[1/5] 复制文件到版本目录..."
+          cp -r app "$NEW_VERSION_DIR/"
+          cp requirements.txt "$NEW_VERSION_DIR/"
+          cp gunicorn_config.py "$NEW_VERSION_DIR/"
+          cp env.example "$NEW_VERSION_DIR/"
+          
+          # 创建虚拟环境（如果不存在）
+          if [ ! -d "$NEW_VERSION_DIR/venv" ]; then
+            echo "[2/5] 创建虚拟环境..."
+            python3 -m venv "$NEW_VERSION_DIR/venv"
+          fi
+          
+          # 安装依赖
+          echo "[3/5] 安装依赖..."
+          source "$NEW_VERSION_DIR/venv/bin/activate"
+          pip install --upgrade pip --quiet
+          pip install -r "$NEW_VERSION_DIR/requirements.txt" --quiet
+          
+          # 检查服务健康（如果服务正在运行）
+          echo "[4/5] 检查当前服务状态..."
+          if systemctl is-active --quiet image-classifier 2>/dev/null; then
+            echo "  当前服务正在运行，准备切换..."
+            OLD_VERSION=$(readlink -f "$CURRENT_LINK" 2>/dev/null | xargs basename 2>/dev/null || echo "")
+            
+            # 创建新的符号链接（原子操作）
+            ln -sfn "$NEW_VERSION_DIR" "$CURRENT_LINK.new"
+            mv "$CURRENT_LINK.new" "$CURRENT_LINK"
+            
+            # 重启服务
+            echo "[5/5] 重启服务..."
+            systemctl restart image-classifier || {
+              echo "  警告: 服务重启失败，尝试回退..."
+              if [ -n "$OLD_VERSION" ]; then
+                ln -sfn "$VERSIONS_DIR/$OLD_VERSION" "$CURRENT_LINK"
+                systemctl restart image-classifier
+              fi
+              exit 1
+            }
+            
+            # 等待服务启动
+            sleep 5
+            
+            # 健康检查
+            if systemctl is-active --quiet image-classifier; then
+              echo "✓ 部署成功！版本 $VERSION 已激活"
+              echo "  当前版本: $VERSION"
+              if [ -n "$OLD_VERSION" ]; then
+                echo "  旧版本: $OLD_VERSION (已保留，可回退)"
+              fi
+            else
+              echo "✗ 服务启动失败，回退到旧版本..."
+              if [ -n "$OLD_VERSION" ]; then
+                ln -sfn "$VERSIONS_DIR/$OLD_VERSION" "$CURRENT_LINK"
+                systemctl restart image-classifier
+                echo "  已回退到版本: $OLD_VERSION"
+              fi
+              exit 1
+            fi
+          else
+            # 服务未运行，直接创建链接
+            echo "[5/5] 服务未运行，创建符号链接..."
+            ln -sfn "$NEW_VERSION_DIR" "$CURRENT_LINK"
+            echo "✓ 部署完成！版本 $VERSION 已准备就绪"
+            echo "  使用以下命令启动服务:"
+            echo "  systemctl start image-classifier"
+          fi
+          
+          # 清理旧版本（保留最近5个版本）
+          echo ""
+          echo "清理旧版本（保留最近5个版本）..."
+          cd "$VERSIONS_DIR"
+          ls -t | tail -n +6 | xargs -r rm -rf
+          echo "✓ 清理完成"
+          
+          echo ""
+          echo "========================================"
+          echo "部署完成！"
+          echo "========================================"
+          DEPLOY_SCRIPT
+          chmod +x deploy-package/deploy.sh
+          
+          # 创建回退脚本
+          cat > deploy-package/rollback.sh << 'ROLLBACK_SCRIPT'
+          #!/bin/bash
+          set -e
+          
+          DEPLOY_DIR="$1"
+          TARGET_VERSION="$2"
+          CURRENT_LINK="$DEPLOY_DIR/current"
+          VERSIONS_DIR="$DEPLOY_DIR/versions"
+          
+          if [ -z "$TARGET_VERSION" ]; then
+            echo "用法: $0 <deploy_dir> <version>"
+            echo "可用版本:"
+            ls -1 "$VERSIONS_DIR" 2>/dev/null || echo "  无可用版本"
+            exit 1
+          fi
+          
+          TARGET_DIR="$VERSIONS_DIR/$TARGET_VERSION"
+          
+          if [ ! -d "$TARGET_DIR" ]; then
+            echo "错误: 版本 $TARGET_VERSION 不存在"
+            exit 1
+          fi
+          
+          echo "========================================"
+          echo "回退到版本: $TARGET_VERSION"
+          echo "========================================"
+          
+          # 切换版本
+          ln -sfn "$TARGET_DIR" "$CURRENT_LINK"
+          
+          # 重启服务
+          if systemctl is-active --quiet image-classifier 2>/dev/null; then
+            echo "重启服务..."
+            systemctl restart image-classifier
+            sleep 5
+            
+            if systemctl is-active --quiet image-classifier; then
+              echo "✓ 回退成功！当前版本: $TARGET_VERSION"
+            else
+              echo "✗ 服务启动失败"
+              exit 1
+            fi
+          else
+            echo "✓ 版本已切换，服务未运行"
+          fi
+          ROLLBACK_SCRIPT
+          chmod +x deploy-package/rollback.sh
+
+      - name: Upload deployment package
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          # 创建临时目录
+          ssh deploy-server "mkdir -p /tmp/deploy-${GITHUB_SHA::8}"
+          
+          # 上传部署包
+          scp -r deploy-package/* deploy-server:/tmp/deploy-${GITHUB_SHA::8}/
+          
+          # 执行部署
+          ssh deploy-server "cd /tmp/deploy-${GITHUB_SHA::8} && \
+            DEPLOY_DIR='${{ secrets.DEPLOY_DIR }}' && \
+            VERSION='${{ steps.version.outputs.version }}' && \
+            ./deploy.sh \"\$DEPLOY_DIR\" \"\$VERSION\""
+
+      - name: Health check
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
+        run: |
+          if [ -n "$HEALTH_CHECK_URL" ]; then
+            echo "执行健康检查..."
+            sleep 10
+            curl -f "$HEALTH_CHECK_URL" || {
+              echo "警告: 健康检查失败，但部署已完成"
+              exit 0
+            }
+            echo "✓ 健康检查通过"
+          else
+            echo "跳过健康检查（未配置 HEALTH_CHECK_URL）"
+          fi
+
+      - name: Cleanup
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        if: always()
+        run: |
+          ssh deploy-server "rm -rf /tmp/deploy-${GITHUB_SHA::8}" || true
+

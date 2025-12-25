@@ -70,6 +70,8 @@ class ModelClient:
     
     async def _classify_with_aliyun(self, image_bytes: bytes) -> Dict:
         """使用阿里云通义千问VL进行分类（官方SDK）"""
+        # 🔍 代码版本检查标记：v2.0-20241207-修复body-KeyError
+        logger.debug("✅ model_client.py 已更新到 v2.0-20241207 (修复body-KeyError版本)")
         try:
             import dashscope
             from dashscope import MultiModalConversation
@@ -105,63 +107,68 @@ class ModelClient:
                 )
             )
             
-            # 解析响应
-            # 🆕 先检查响应体中的错误信息（即使HTTP状态码是200，响应体也可能包含错误）
-            # 调试：打印 response 对象的所有属性
-            logger.debug(f"Response对象属性: {dir(response)}")
-            logger.debug(f"Response.status_code: {response.status_code}")
+            # 解析响应（完全避免直接访问可能不存在的属性）
+            # 使用 try-except 包裹所有属性访问，防止 KeyError
+            # 🔍 代码版本检查：如果看到这个日志，说明新代码已生效
+            logger.debug("✅ 使用新版本响应解析逻辑 (v2.0-20241207)")
+            status_code = None
+            try:
+                # 尝试安全获取 status_code
+                if hasattr(response, 'status_code'):
+                    try:
+                        status_code = response.status_code
+                    except (KeyError, AttributeError, TypeError):
+                        pass
+            except Exception:
+                pass
             
-            # 检查 response.code 是否存在且表示错误（可能是字符串如 "DataInspectionFailed" 或数字如 400）
-            if hasattr(response, 'code'):
-                response_code = response.code
-                response_message = getattr(response, 'message', '')
-                logger.debug(f"检测到 response.code: {response_code} (类型: {type(response_code)}), message: {response_message}")
-                
-                # 如果是字符串类型的错误码（如 "DataInspectionFailed"），或者数字类型但不是200
-                if (isinstance(response_code, str) and response_code != "200" and response_code.strip() != "") or \
-                   (isinstance(response_code, int) and response_code != 200):
-                    error_msg = f"API返回错误码: {response_code}, 消息: {response_message if response_message else '未知错误'}"
-                    logger.error(error_msg)
-                    raise Exception(error_msg)
-                # 如果 code 是空字符串，可能是其他类型的错误
-                elif isinstance(response_code, str) and response_code.strip() == "":
-                    # 检查是否有其他错误信息
-                    if hasattr(response, 'request_id'):
-                        logger.warning(f"response.code 为空字符串，但存在 request_id: {response.request_id}")
-                    # 检查响应体是否有错误信息
-                    if hasattr(response, 'body') or hasattr(response, 'text'):
-                        response_body = getattr(response, 'body', getattr(response, 'text', ''))
-                        logger.warning(f"response.code 为空，响应体: {str(response_body)[:200]}")
-            
-            # 检查HTTP状态码
-            if response.status_code == 200:
-                # 成功响应
-                if hasattr(response, 'output') and hasattr(response.output, 'choices'):
-                    content = response.output.choices[0].message.content[0]['text']
-                    result = self._parse_response(content)
-                    logger.info(f"阿里云通义千问分类完成: {result['category']}")
-                    return result
-                else:
-                    # 响应格式错误，记录更多信息
-                    logger.error(f"响应格式错误: status_code={response.status_code}, has_output={hasattr(response, 'output')}")
+            # 检查是否是成功响应
+            if status_code == 200:
+                # 成功响应 - 安全访问 output
+                try:
                     if hasattr(response, 'output'):
-                        logger.error(f"response.output 类型: {type(response.output)}, 属性: {dir(response.output)}")
-                    # 尝试获取更多信息
-                    response_attrs = {attr: getattr(response, attr, None) for attr in ['code', 'message', 'request_id', 'body', 'text'] if hasattr(response, attr)}
-                    logger.error(f"response 其他属性: {response_attrs}")
-                    raise Exception(f"响应格式错误: 缺少 output.choices")
+                        try:
+                            output = response.output
+                            if hasattr(output, 'choices') and output.choices:
+                                try:
+                                    content = output.choices[0].message.content[0]['text']
+                                    result = self._parse_response(content)
+                                    logger.info(f"阿里云通义千问分类完成: {result['category']}")
+                                    return result
+                                except (KeyError, AttributeError, IndexError, TypeError) as e:
+                                    logger.error(f"解析响应内容失败: {e}")
+                                    raise Exception(f"响应格式错误: 无法解析内容 - {str(e)}")
+                        except (KeyError, AttributeError, TypeError) as e:
+                            logger.error(f"访问 choices 失败: {e}")
+                            raise Exception(f"响应格式错误: 缺少 choices - {str(e)}")
+                    else:
+                        logger.error(f"响应格式错误: 缺少 output 属性")
+                        raise Exception(f"响应格式错误: 缺少 output")
+                except Exception as e:
+                    # 如果已经是我们抛出的异常，直接抛出
+                    if "响应格式错误" in str(e):
+                        raise
+                    # 其他异常也抛出
+                    logger.error(f"处理响应时发生错误: {e}")
+                    raise Exception(f"响应处理失败: {str(e)}")
             else:
-                # API调用失败（HTTP状态码不是200）
-                response_code = getattr(response, 'code', 'N/A')
-                response_message = getattr(response, 'message', '未知错误')
-                # 尝试获取更多错误信息
-                error_details = f"HTTP状态码: {response.status_code}"
-                if hasattr(response, 'text'):
-                    error_details += f", 响应文本: {str(response.text)[:200]}"
-                if hasattr(response, 'body'):
-                    error_details += f", 响应体: {str(response.body)[:200]}"
+                # API调用失败 - 构建错误信息
+                error_msg = f"API调用失败"
+                if status_code:
+                    error_msg = f"API返回HTTP状态码: {status_code}"
                 
-                error_msg = f"API返回HTTP状态码: {response.status_code}, 错误码: {response_code}, 消息: {response_message}, 详情: {error_details}"
+                # 尝试获取错误消息（完全安全的方式）
+                try:
+                    if hasattr(response, 'message'):
+                        try:
+                            msg = response.message
+                            if msg:
+                                error_msg += f", 消息: {msg}"
+                        except (KeyError, AttributeError, TypeError):
+                            pass
+                except Exception:
+                    pass
+                
                 logger.error(error_msg)
                 raise Exception(error_msg)
             
@@ -175,8 +182,7 @@ class ModelClient:
             }
         except Exception as e:
             logger.error(f"阿里云API调用失败: {e}")
-            # 🆕 抛出异常，让调用方可以触发降级逻辑（本地推理）
-            raise Exception(f"分类失败: {str(e)}")
+            raise
     
     async def _classify_with_openai(self, image_bytes: bytes) -> Dict:
         """使用OpenAI Vision API进行分类"""

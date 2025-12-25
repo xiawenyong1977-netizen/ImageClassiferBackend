@@ -781,9 +781,29 @@ async def create_wechat_menu():
         menu_data = {
             "button": [
                 {
-                    "type": "view",
-                    "name": "芯图相册",
-                    "url": xintu_url
+                    "name": "AI软件",
+                    "sub_button": [
+                        {
+                            "type": "view",
+                            "name": "芯图相册",
+                            "url": xintu_url
+                        },
+                        {
+                            "type": "view",
+                            "name": "心经助读",
+                            "url": "https://www.xintuxiangce.top/zenheart/index.html"
+                        },
+                        {
+                            "type": "view",
+                            "name": "三体游戏",
+                            "url": "https://www.xintuxiangce.top/threebody-3d.html"
+                        },
+                        {
+                            "type": "view",
+                            "name": "天机面相",
+                            "url": "https://www.xintuzhaopian.com/"
+                        }
+                    ]
                 },
                 {
                     "name": "会员服务",
