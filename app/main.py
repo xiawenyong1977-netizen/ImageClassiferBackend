@@ -33,12 +33,16 @@ logger.add(
 
 # 如果配置了日志文件
 if settings.LOG_FILE:
-    logger.add(
-        settings.LOG_FILE,
-        rotation="100 MB",
-        retention="30 days",
-        level=settings.LOG_LEVEL
-    )
+    try:
+        logger.add(
+            settings.LOG_FILE,
+            rotation="100 MB",
+            retention="30 days",
+            level=settings.LOG_LEVEL
+        )
+    except (PermissionError, OSError) as e:
+        # 在CI环境或没有权限的情况下，跳过文件日志配置
+        logger.warning(f"无法创建日志文件 {settings.LOG_FILE}: {e}，将仅使用控制台日志")
 
 
 @asynccontextmanager
