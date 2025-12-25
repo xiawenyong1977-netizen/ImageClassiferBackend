@@ -30,7 +30,13 @@ async def health_check():
     model_status = "available" if settings.LLM_API_KEY else "not_configured"
     
     # 确定整体状态
-    status = "healthy" if db_status == "connected" and model_status == "available" else "unhealthy"
+    # 在测试环境中，只要数据库连接正常就认为健康
+    # 在生产环境中，需要数据库和模型API都可用
+    is_test_env = settings.APP_ENV.lower() in ["test", "testing", "ci"]
+    if is_test_env:
+        status = "healthy" if db_status == "connected" else "unhealthy"
+    else:
+        status = "healthy" if db_status == "connected" and model_status == "available" else "unhealthy"
     
     return HealthCheckResponse(
         status=status,

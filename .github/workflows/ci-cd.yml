@@ -1,8 +1,9 @@
 name: CI/CD Pipeline
 
 on:
+  # 所有分支push时都触发测试（允许在feature分支上多次提交并自动测试）
   push:
-    # 所有分支push时都触发测试（部署任务仍只在main/master分支触发）
+  # PR 时也触发测试
   pull_request:
     branches:
       - main
@@ -17,6 +18,14 @@ jobs:
   # 测试任务
   test:
     name: Run Tests
+    # 使用 concurrency 避免重复运行：
+    # - 同一个分支的多次 push 会取消之前的运行，只运行最新的
+    # - PR 和对应的 push 使用相同的 group（基于分支名），避免重复运行
+    # 对于 PR 事件，使用 PR 的源分支名；对于 push 事件，使用当前分支名
+    # 使用 github.ref_name 获取分支名（去掉 refs/heads/ 前缀）
+    concurrency:
+      group: test-${{ github.event.pull_request.head.ref || github.ref_name }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     
     services:
@@ -71,6 +80,7 @@ jobs:
           MYSQL_DATABASE: image_classifier_test
           APP_ENV: test
           LOG_LEVEL: DEBUG
+          LLM_API_KEY: test-key-for-ci  # 测试用的API密钥（健康检查只检查是否配置，不实际调用）
         run: |
           pytest tests/ -v --cov=app --cov-report=xml --cov-report=term || true
           # 如果测试目录不存在，至少检查代码是否可以导入
