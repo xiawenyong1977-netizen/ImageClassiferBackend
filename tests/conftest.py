@@ -5,6 +5,7 @@ import pytest
 import os
 from pathlib import Path
 from fastapi.testclient import TestClient
+from httpx import AsyncClient
 from app.main import app
 from app.auth import create_access_token
 from app.config import settings
@@ -46,8 +47,15 @@ async def setup_test_db():
 
 @pytest.fixture
 def client():
-    """测试客户端fixture"""
+    """测试客户端fixture（同步）"""
     return TestClient(app)
+
+
+@pytest.fixture
+async def async_client():
+    """异步测试客户端fixture（推荐用于需要数据库的测试）"""
+    async with AsyncClient(app=app, base_url="http://test") as ac:
+        yield ac
 
 
 @pytest.fixture

@@ -61,16 +61,24 @@ class Database:
         if not self.pool:
             await self.connect()
         
-        async with self.pool.acquire() as conn:
-            try:
-                # 确保连接可用并设置会话级隔离级别与autocommit
-                await conn.ping()
-                async with conn.cursor() as cursor:
-                    await cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
-                    await cursor.execute("SET autocommit=1")
-            except Exception as e:
-                logger.warning(f"数据库连接会话初始化失败: {e}")
-            yield conn
+        try:
+            async with self.pool.acquire() as conn:
+                try:
+                    # 确保连接可用并设置会话级隔离级别与autocommit
+                    await conn.ping()
+                    async with conn.cursor() as cursor:
+                        await cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
+                        await cursor.execute("SET autocommit=1")
+                except Exception as e:
+                    logger.warning(f"数据库连接会话初始化失败: {e}")
+                yield conn
+        except RuntimeError as e:
+            # 如果事件循环已关闭，抛出更友好的错误
+            error_msg = str(e).lower()
+            if "event loop is closed" in error_msg:
+                logger.error("数据库操作失败：事件循环已关闭（可能是测试环境问题）")
+                raise RuntimeError("数据库操作失败：事件循环已关闭。请确保在异步上下文中使用数据库操作。")
+            raise
     
     @asynccontextmanager
     async def get_cursor(self):

@@ -19,9 +19,10 @@ class TestLocationV2Stats:
         # 统计接口需要认证，应该返回401或403
         assert response.status_code in [401, 403]
     
-    def test_stats_with_auth(self, auth_headers):
-        """测试认证后访问统计接口"""
-        response = client.get(
+    @pytest.mark.asyncio
+    async def test_stats_with_auth(self, async_client, auth_headers):
+        """测试认证后访问统计接口（使用异步客户端）"""
+        response = await async_client.get(
             "/api/v2/location/stats",
             headers=auth_headers
         )
