@@ -6,7 +6,7 @@
 """
 
 from fastapi import APIRouter, File, UploadFile, Form, Header, HTTPException, Request
-from typing import Optional, List
+from typing import Optional, List, Tuple
 import time
 import asyncio
 import io
@@ -34,7 +34,7 @@ from loguru import logger
 router = APIRouter(prefix="/api/v2/classify", tags=["classify-v2"])
 
 
-def _classify_internal_error(exception: Exception) -> tuple[InternalErrorType, str]:
+def _classify_internal_error(exception: Exception) -> Tuple[InternalErrorType, str]:
     """
     根据异常类型判断内部服务错误类型
     
