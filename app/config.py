@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     LLM_MODEL: str = Field(default="gpt-4-vision-preview", description="模型名称")
     LLM_MAX_TOKENS: int = Field(default=500, description="最大token数")
     LLM_TIMEOUT: int = Field(default=30, description="请求超时(秒)")
+    LLM_MAX_RETRIES: int = Field(default=3, description="最大重试次数")
+    LLM_RETRY_DELAY: float = Field(default=1.0, description="重试延迟(秒)")
     
     # ===== 本地推理配置 =====
     USE_LOCAL_INFERENCE: bool = Field(default=False, description="是否使用本地推理（开启后不调用大模型）")

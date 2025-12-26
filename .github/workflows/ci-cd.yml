@@ -63,7 +63,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-cov pytest-asyncio
+          # pytest相关依赖已在requirements.txt中
 
       - name: Run linting (optional)
         run: |
@@ -81,8 +81,13 @@ jobs:
           APP_ENV: test
           LOG_LEVEL: DEBUG
           LLM_API_KEY: test-key-for-ci  # 测试用的API密钥（健康检查只检查是否配置，不实际调用）
+          # 不设置真实API密钥，真实API测试会自动跳过
+          # TEST_ALIYUN_API_KEY: (不设置，让真实测试自动跳过)
+          # TEST_OPENAI_API_KEY: (不设置，让真实测试自动跳过)
+          # TEST_CLAUDE_API_KEY: (不设置，让真实测试自动跳过)
         run: |
-          pytest tests/ -v --cov=app --cov-report=xml --cov-report=term || true
+          # 运行所有测试（真实API测试会自动跳过，因为没有设置API密钥）
+          pytest tests/ -v --cov=app --cov-report=xml --cov-report=term
           # 如果测试目录不存在，至少检查代码是否可以导入
           python -c "from app.main import app; print('✓ App imports successfully')" || exit 1
 
