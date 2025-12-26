@@ -192,6 +192,7 @@ class UnifiedLLMCacheService:
         model_version: Optional[str] = None,
         service_type: Optional[str] = None,
         edit_type: Optional[str] = None,
+        is_default_prompt: Optional[bool] = None,
         **extra_fields
     ) -> bool:
         """
@@ -206,6 +207,7 @@ class UnifiedLLMCacheService:
             model_version: 模型版本
             service_type: 业务类型（可选，用于统计）
             edit_type: 编辑类型（可选，仅编辑服务）
+            is_default_prompt: 是否使用默认prompt（用于判断是否需要解析JSON）
             **extra_fields: 扩展字段
         
         Returns:
@@ -228,6 +230,8 @@ class UnifiedLLMCacheService:
                 model_result_data["service_type"] = service_type
             if edit_type:
                 model_result_data["edit_type"] = edit_type
+            if is_default_prompt is not None:
+                model_result_data["is_default_prompt"] = is_default_prompt
             
             model_result_json = json.dumps(model_result_data, ensure_ascii=False)
             

@@ -4,8 +4,10 @@
 """
 
 import asyncio
+import json
+import re
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from loguru import logger
 from app.config import settings
 from app.services.llm.providers import AliyunProvider, OpenAIProvider, ClaudeProvider, DeepseekProvider
@@ -16,6 +18,91 @@ from app.utils.hash_utils import HashUtils
 
 class LLMService:
     """统一LLM服务类"""
+    
+    @staticmethod
+    def _parse_classification_response(content: str, try_parse_json: bool = True) -> dict:
+        """
+        解析分类任务的LLM返回内容
+        
+        Args:
+            content: LLM返回的文本内容（可能是JSON格式或纯文本），必须是字符串
+            try_parse_json: 是否尝试解析JSON格式（默认True，如果使用自定义prompt应设为False）
+            
+        Returns:
+            解析后的分类结果字典：
+            {
+                "category": str,
+                "confidence": float (可选),
+                "description": str (可选),
+                "background_color": str (可选),
+                "raw_content": str (原始响应内容)
+            }
+        """
+        # 确保content是字符串
+        if not isinstance(content, str):
+            logger.warning(f"_parse_classification_response收到非字符串类型: {type(content)}")
+            return {
+                "category": "other",
+                "confidence": None,
+                "description": None,
+                "background_color": None,
+                "raw_content": str(content) if content else None
+            }
+        
+        if not content:
+            return {
+                "category": "other",
+                "confidence": None,
+                "description": None,
+                "background_color": None,
+                "raw_content": None
+            }
+        
+        # 如果不尝试解析JSON，直接返回原始内容（自定义prompt的情况）
+        if not try_parse_json:
+            return {
+                "category": None,  # 自定义prompt时，category设为None，客户端应使用raw_content
+                "confidence": None,
+                "description": None,
+                "background_color": None,
+                "raw_content": content  # 保存完整的原始响应内容，供客户端自行解析
+            }
+        
+        # 尝试解析JSON格式
+        try:
+            # 移除可能的markdown代码块标记
+            content_clean = content.strip()
+            if content_clean.startswith("```json"):
+                content_clean = content_clean[7:]
+            if content_clean.startswith("```"):
+                content_clean = content_clean[3:]
+            if content_clean.endswith("```"):
+                content_clean = content_clean[:-3]
+            content_clean = content_clean.strip()
+            
+            parsed = json.loads(content_clean)
+            
+            # 提取字段
+            result = {
+                "category": parsed.get("category", "other"),
+                "confidence": float(parsed.get("confidence", 0.5)) if parsed.get("confidence") is not None else None,
+                "description": parsed.get("description"),
+                "background_color": parsed.get("background_color"),
+                "raw_content": content  # 保存原始响应内容
+            }
+            
+            return result
+            
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            # JSON解析失败，将整个content作为category
+            logger.warning(f"LLM返回内容不是JSON格式，使用原始内容作为category: {e}")
+            return {
+                "category": content.strip()[:100],  # 限制长度
+                "confidence": None,  # 无法解析时confidence为None
+                "description": None,
+                "background_color": None,
+                "raw_content": content  # 保存原始响应内容，让客户端自己解析
+            }
     
     def __init__(
         self,
@@ -110,6 +197,7 @@ class LLMService:
             API响应结果字典，包含：
             - success: 是否成功
             - content: 响应内容（文本，成功时）
+            - parsed_result: 解析后的分类结果（成功时，仅当使用默认prompt时才有）
             - error: 错误信息字典（失败时），包含：
               - type: 错误类型
               - message: 技术错误消息
@@ -120,6 +208,9 @@ class LLMService:
         """
         if prompt is None:
             prompt = settings.CLASSIFICATION_PROMPT
+        
+        # 判断是否使用默认prompt（默认prompt要求返回JSON格式）
+        is_default_prompt = prompt == settings.CLASSIFICATION_PROMPT
         
         # 计算image_hash
         image_hash = HashUtils.calculate_sha256(image_bytes)
@@ -145,12 +236,25 @@ class LLMService:
                         "error": error_info,
                         "from_cache": True
                     }
-                # 返回成功结果
-                return {
+                # 返回成功结果（缓存中存储的是原始内容字符串）
+                # 处理result字段：可能是字符串（新格式）或dict（旧格式兼容）
+                cached_result_data = cached.get('result', {})
+                if isinstance(cached_result_data, dict):
+                    # 旧格式兼容：dict中包含content字段
+                    content = cached_result_data.get('content')
+                else:
+                    # 新格式：result就是原始内容字符串
+                    content = cached_result_data
+                
+                result = {
                     "success": True,
-                    "content": cached.get('result', {}).get('content') if isinstance(cached.get('result'), dict) else None,
+                    "content": content,
                     "from_cache": True
                 }
+                # 如果使用默认prompt，自动解析JSON
+                if is_default_prompt and content:
+                    result["parsed_result"] = self._parse_classification_response(content, try_parse_json=True)
+                return result
         
         # 2. 缓存未命中，调用API
         try:
@@ -161,16 +265,24 @@ class LLMService:
                 **kwargs
             )
             
-            # 3. 如果成功，保存到缓存
+            # 3. 如果成功，保存到缓存（只保存原始内容，不解析）
             if use_cache and result.get('success'):
+                content = result.get('content')
+                
+                # 保存原始内容到缓存（不解析，解析在check_cache时进行）
                 await unified_llm_cache.save_result(
                     prompt=prompt,
                     image_hash=image_hash,
                     provider=self.provider,
                     model_id=self.model,
-                    result=result.get('content'),
-                    service_type="classification"
+                    result=content,  # 只保存原始内容（字符串）
+                    service_type="classification",
+                    is_default_prompt=is_default_prompt  # 保存是否使用默认prompt的标记
                 )
+                
+                # 如果使用默认prompt，解析响应并添加到返回结果中
+                if is_default_prompt and content:
+                    result["parsed_result"] = self._parse_classification_response(content, try_parse_json=True)
             
             return result
             
@@ -286,10 +398,15 @@ class LLMService:
                         "error": error_info,
                         "from_cache": True
                     }
-                # 返回成功结果
+                # 返回成功结果（统一格式：result是字符串）
+                raw_content = cached.get('result')
+                if isinstance(raw_content, dict):
+                    # 兼容旧格式：dict中包含content字段
+                    raw_content = raw_content.get('content')
+                
                 return {
                     "success": True,
-                    "content": cached.get('result', {}).get('content') if isinstance(cached.get('result'), dict) else None,
+                    "content": raw_content,
                     "from_cache": True
                 }
         
@@ -304,13 +421,17 @@ class LLMService:
             
             # 3. 如果成功，保存到缓存
             if use_cache and result.get('success'):
+                # 判断是否使用默认prompt
+                is_default_prompt = prompt == settings.COLOR_CLASSIFICATION_PROMPT
+                
                 await unified_llm_cache.save_result(
                     prompt=prompt,
                     image_hash=image_hash,
                     provider=self.provider,
                     model_id=self.model,
                     result=result.get('content'),
-                    service_type="color_classification"
+                    service_type="color_classification",
+                    is_default_prompt=is_default_prompt
                 )
             
             return result
@@ -427,10 +548,15 @@ class LLMService:
                         "error": error_info,
                         "from_cache": True
                     }
-                # 返回成功结果
+                # 返回成功结果（统一格式：result是字符串）
+                raw_content = cached.get('result')
+                if isinstance(raw_content, dict):
+                    # 兼容旧格式：dict中包含content字段
+                    raw_content = raw_content.get('content')
+                
                 return {
                     "success": True,
-                    "content": cached.get('result', {}).get('content') if isinstance(cached.get('result'), dict) else None,
+                    "content": raw_content,
                     "from_cache": True
                 }
         
@@ -445,13 +571,17 @@ class LLMService:
             
             # 3. 如果成功，保存到缓存
             if use_cache and result.get('success'):
+                # 判断是否使用默认prompt
+                is_default_prompt = prompt == settings.COMPOSITION_ANALYSIS_PROMPT
+                
                 await unified_llm_cache.save_result(
                     prompt=prompt,
                     image_hash=image_hash,
                     provider=self.provider,
                     model_id=self.model,
                     result=result.get('content'),
-                    service_type="composition_analysis"
+                    service_type="composition_analysis",
+                    is_default_prompt=is_default_prompt
                 )
             
             return result
@@ -519,18 +649,20 @@ class LLMService:
         event: str,
         time: Optional[str] = None,
         prompt: Optional[str] = None,
-        use_cache: bool = True,
+        use_cache: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
         """
         调用大模型进行面相预测（基于面相特征预测事件的吉凶）
+        
+        注意：此接口默认不使用缓存，因为prompt包含动态的time和event，每次调用prompt都不同，缓存命中率极低
         
         Args:
             image_bytes: 图片二进制数据（需包含清晰的人脸）
             event: 用户描述的事件（如："我要去参加一个重要的面试"）
             time: 当前时间字符串（如："2024年1月15日 14:30"），None则自动生成
             prompt: 提示词，None则使用配置的面相预测提示词
-            use_cache: 是否使用缓存（默认True）
+            use_cache: 是否使用缓存（默认False，因为prompt包含动态内容，缓存意义不大）
             **kwargs: 其他参数
             
         Returns:
@@ -585,14 +717,20 @@ class LLMService:
                         "error": error_info,
                         "from_cache": True
                     }
-                # 返回成功结果
+                # 返回成功结果（统一格式：result是字符串）
+                raw_content = cached.get('result')
+                if isinstance(raw_content, dict):
+                    # 兼容旧格式：dict中包含content字段
+                    raw_content = raw_content.get('content')
+                
                 return {
                     "success": True,
-                    "content": cached.get('result', {}).get('content') if isinstance(cached.get('result'), dict) else None,
+                    "content": raw_content,
                     "from_cache": True
                 }
         
-        # 2. 缓存未命中，调用API
+        # 2. 缓存未命中或未启用缓存，调用API
+        # 注意：由于prompt包含动态的time和event，缓存命中率极低，默认不使用缓存
         try:
             result = await self._adapter.call_with_retry(
                 task_type="classification",
@@ -601,15 +739,23 @@ class LLMService:
                 **kwargs
             )
             
-            # 3. 如果成功，保存到缓存
+            # 3. 如果启用缓存且成功，保存到缓存（但通常不会命中，因为prompt包含动态内容）
             if use_cache and result.get('success'):
+                # 判断是否使用默认prompt（检查prompt是否基于默认模板）
+                is_default_prompt = (
+                    prompt is not None and 
+                    (prompt.startswith(settings.FACE_FORTUNE_PROMPT.split("{")[0]) or
+                     "【当前时间】" in prompt or "【事件】" in prompt)
+                ) if prompt else False
+                
                 await unified_llm_cache.save_result(
                     prompt=prompt,
                     image_hash=image_hash,
                     provider=self.provider,
                     model_id=self.model,
                     result=result.get('content'),
-                    service_type="face_fortune"
+                    service_type="face_fortune",
+                    is_default_prompt=is_default_prompt
                 )
             
             return result
@@ -733,10 +879,15 @@ class LLMService:
                         "error": error_info,
                         "from_cache": True
                     }
-                # 返回成功结果
+                # 返回成功结果（统一格式：result是字符串）
+                raw_content = cached.get('result')
+                if isinstance(raw_content, dict):
+                    # 兼容旧格式：dict中包含content字段
+                    raw_content = raw_content.get('content')
+                
                 return {
                     "success": True,
-                    "result_url": cached.get('result') if isinstance(cached.get('result'), str) else None,
+                    "result_url": raw_content if isinstance(raw_content, str) else None,
                     "from_cache": True
                 }
         
@@ -778,7 +929,8 @@ class LLMService:
                         model_id=actual_model,
                         result=result_url,
                         service_type="image_edit",
-                        edit_type=edit_type
+                        edit_type=edit_type,
+                        is_default_prompt=None  # 图像编辑不使用默认prompt
                     )
             
             return result
@@ -1003,6 +1155,123 @@ class LLMService:
                     "error_code": None
                 }
             }
+    
+    async def check_cache(
+        self,
+        prompt: str,
+        image_hash: str
+    ) -> Optional[dict]:
+        """
+        查询单张图片的缓存结果（仅查询，不调用LLM）
+        根据service_type进行相应的解析
+        
+        Args:
+            prompt: 提示词
+            image_hash: 图片哈希
+            
+        Returns:
+            解析后的缓存结果字典，如果未命中返回None
+            格式：
+            {
+                "cached": True,
+                "content": "原始内容",
+                "parsed_result": {...},  # 根据service_type解析的结果（可选）
+                "service_type": "classification" | "image_edit" | ...
+            }
+        """
+        model_key = f"{self.provider}:{self.model}"
+        cached = await unified_llm_cache.get_cached_result(
+            prompt=prompt,
+            image_hash=image_hash,
+            model_key=model_key
+        )
+        
+        if not cached:
+            return None
+        
+        # 检查是否是错误结果
+        if cached.get('status') == 'error':
+            return {
+                "cached": True,
+                "success": False,
+                "error": cached.get('error', {}),
+                "service_type": cached.get('service_type')
+            }
+        
+        # 获取service_type和原始内容
+        service_type = cached.get('service_type', 'classification')
+        # 处理result字段：可能是字符串（新格式）或dict（旧格式兼容）
+        cached_result_data = cached.get('result', {})
+        if isinstance(cached_result_data, dict):
+            # 旧格式兼容：dict中包含content字段
+            raw_content = cached_result_data.get('content')
+        else:
+            # 新格式：result就是原始内容字符串
+            raw_content = cached_result_data
+        
+        result = {
+            "cached": True,
+            "content": raw_content,
+            "service_type": service_type
+        }
+        
+        # 根据service_type进行不同的解析
+        # 优先使用缓存中保存的is_default_prompt标记，如果没有则回退到字符串比较
+        cached_is_default_prompt = cached.get('is_default_prompt')
+        
+        if service_type == "classification":
+            # 分类服务：使用缓存中的标记，如果没有则回退到字符串比较
+            is_default_prompt = cached_is_default_prompt if cached_is_default_prompt is not None else (prompt == settings.CLASSIFICATION_PROMPT)
+            if is_default_prompt and raw_content:
+                # 默认prompt：解析JSON
+                result["parsed_result"] = self._parse_classification_response(raw_content, try_parse_json=True)
+            # 自定义prompt：不解析，返回原始内容（parsed_result为None）
+        elif service_type == "image_edit":
+            # 图像编辑服务：result就是URL字符串，不需要解析
+            result["result_url"] = raw_content
+        elif service_type == "color_classification":
+            # 颜色分类服务：使用缓存中的标记，如果没有则回退到字符串比较
+            is_default_prompt = cached_is_default_prompt if cached_is_default_prompt is not None else (prompt == settings.COLOR_CLASSIFICATION_PROMPT)
+            if is_default_prompt and raw_content:
+                # 默认prompt：解析JSON（颜色分类返回的是JSON格式）
+                result["parsed_result"] = self._parse_classification_response(raw_content, try_parse_json=True)
+            # 自定义prompt：不解析，返回原始内容
+        elif service_type == "composition_analysis":
+            # 构图分析服务：使用缓存中的标记，如果没有则回退到字符串比较
+            is_default_prompt = cached_is_default_prompt if cached_is_default_prompt is not None else (prompt == settings.COMPOSITION_ANALYSIS_PROMPT)
+            if is_default_prompt and raw_content:
+                # 默认prompt：解析JSON（构图分析返回的是JSON格式）
+                result["parsed_result"] = self._parse_classification_response(raw_content, try_parse_json=True)
+            # 自定义prompt：不解析，返回原始内容
+        elif service_type == "face_fortune":
+            # 面相预测服务：使用缓存中的标记，如果没有则回退到模式匹配
+            if cached_is_default_prompt is not None:
+                is_default_prompt = cached_is_default_prompt
+            else:
+                # 回退到模式匹配判断
+                default_prompt_template = settings.FACE_FORTUNE_PROMPT
+                default_prompt_pattern = re.sub(r'\{time\}', r'.*?', re.escape(default_prompt_template))
+                default_prompt_pattern = re.sub(r'\{event\}', r'.*?', default_prompt_pattern)
+                is_default_prompt = (
+                    "【当前时间】" in prompt or 
+                    "【事件】" in prompt or
+                    re.match(default_prompt_pattern, prompt) is not None
+                )
+            if is_default_prompt and raw_content:
+                # 默认prompt：解析JSON（面相预测返回的是JSON格式）
+                result["parsed_result"] = self._parse_classification_response(raw_content, try_parse_json=True)
+            # 自定义prompt：不解析，返回原始内容
+        
+        return result
+    
+    def get_model_key(self) -> str:
+        """
+        获取当前模型的key（用于缓存查询）
+        
+        Returns:
+            模型key（格式: "provider:model"）
+        """
+        return f"{self.provider}:{self.model}"
     
     def get_provider_info(self) -> Dict[str, Any]:
         """

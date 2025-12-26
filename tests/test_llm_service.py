@@ -706,8 +706,8 @@ class TestLLMServiceCache:
     """LLM服务缓存功能测试"""
     
     @pytest.mark.asyncio
-    async def test_classify_image_cache_hit(self):
-        """测试分类服务缓存命中"""
+    async def test_classify_image_cache_hit_with_parsed_result(self):
+        """测试分类服务缓存命中（新格式：包含解析后的字段）"""
         service = LLMService(
             provider="aliyun",
             api_key="test_key",
@@ -715,13 +715,44 @@ class TestLLMServiceCache:
         )
         
         image_bytes = b"test_image_data"
-        prompt = "test classification prompt"
+        prompt = settings.CLASSIFICATION_PROMPT  # 使用默认prompt
         
-        # Mock缓存返回成功结果（格式与unified_llm_cache返回的格式一致）
-        # 注意：根据代码逻辑，如果result是dict，会取result.get('content')
-        # 如果result是字符串，会返回None（可能是代码bug，但测试要符合当前行为）
+        # Mock缓存返回新格式（字符串格式，包含is_default_prompt标记）
         cached_result = {
-            "result": {"content": '{"category": "pets"}'},  # 分类服务的result应该是dict，包含content字段
+            "result": '{"category": "pets", "confidence": 0.95}',  # 新格式：result是字符串
+            "status": "success",
+            "service_type": "classification",
+            "is_default_prompt": True  # 缓存中保存的标记
+        }
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = cached_result
+            
+            result = await service.classify_image(image_bytes, prompt=prompt, use_cache=True)
+            
+            assert result["success"] is True
+            assert result["from_cache"] is True
+            assert result["content"] == '{"category": "pets", "confidence": 0.95}'
+            # 验证使用了缓存中的解析结果（不需要重新解析）
+            assert "parsed_result" in result
+            assert result["parsed_result"]["category"] == "pets"
+            assert result["parsed_result"]["confidence"] == 0.95
+    
+    @pytest.mark.asyncio
+    async def test_classify_image_cache_hit_legacy_format(self):
+        """测试分类服务缓存命中（旧格式：字符串，兼容性测试）"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        prompt = settings.CLASSIFICATION_PROMPT  # 使用默认prompt
+        
+        # Mock缓存返回旧格式（字符串）
+        cached_result = {
+            "result": '{"category": "pets", "confidence": 0.95}',
             "status": "success"
         }
         
@@ -732,9 +763,74 @@ class TestLLMServiceCache:
             
             assert result["success"] is True
             assert result["from_cache"] is True
-            assert result["content"] == '{"category": "pets"}'
-            # 验证没有调用API（通过检查adapter的call_with_retry是否被调用）
-            # 由于使用了mock，我们通过检查缓存被调用而API未被调用来验证
+            assert result["content"] == '{"category": "pets", "confidence": 0.95}'
+            # 验证会重新解析（因为旧格式没有解析结果）
+            assert "parsed_result" in result
+            assert result["parsed_result"]["category"] == "pets"
+    
+    @pytest.mark.asyncio
+    async def test_classify_image_cache_hit_custom_prompt(self):
+        """测试分类服务缓存命中（自定义prompt：字符串格式）"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        custom_prompt = "Custom classification prompt"
+        
+        # Mock缓存返回字符串格式（自定义prompt）
+        cached_result = {
+            "result": "This is a custom response",
+            "status": "success"
+        }
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = cached_result
+            
+            result = await service.classify_image(image_bytes, prompt=custom_prompt, use_cache=True)
+            
+            assert result["success"] is True
+            assert result["from_cache"] is True
+            assert result["content"] == "This is a custom response"
+            # 自定义prompt不应该有parsed_result（除非是默认prompt）
+            # 但代码中如果is_default_prompt为False，不会解析
+    
+    @pytest.mark.asyncio
+    async def test_classify_image_cache_hit_dict_without_parsed_fields(self):
+        """测试分类服务缓存命中（dict格式但没有解析字段：兼容性测试）"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        prompt = settings.CLASSIFICATION_PROMPT  # 使用默认prompt
+        
+        # Mock缓存返回旧格式（dict格式，兼容性测试）
+        cached_result = {
+            "result": {
+                "content": '{"category": "pets", "confidence": 0.95}'
+                # 旧格式：dict中包含content字段
+            },
+            "status": "success",
+            "service_type": "classification"
+            # 没有is_default_prompt标记（旧缓存）
+        }
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = cached_result
+            
+            result = await service.classify_image(image_bytes, prompt=prompt, use_cache=True)
+            
+            assert result["success"] is True
+            assert result["from_cache"] is True
+            assert result["content"] == '{"category": "pets", "confidence": 0.95}'
+            # 验证会重新解析（因为dict中没有解析字段）
+            assert "parsed_result" in result
+            assert result["parsed_result"]["category"] == "pets"
     
     @pytest.mark.asyncio
     async def test_classify_image_cache_miss(self):
@@ -800,8 +896,8 @@ class TestLLMServiceCache:
             assert result["error"]["user_message"] == "输入参数有误"
     
     @pytest.mark.asyncio
-    async def test_classify_image_save_to_cache_on_success(self):
-        """测试分类服务成功时保存到缓存"""
+    async def test_classify_image_save_to_cache_default_prompt(self):
+        """测试分类服务成功时保存到缓存（默认prompt：保存结构化数据）"""
         service = LLMService(
             provider="aliyun",
             api_key="test_key",
@@ -809,14 +905,14 @@ class TestLLMServiceCache:
         )
         
         image_bytes = b"test_image_data"
-        prompt = "test classification prompt"
+        prompt = settings.CLASSIFICATION_PROMPT  # 使用默认prompt
         
         with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
              patch.object(unified_llm_cache, 'save_result', new_callable=AsyncMock) as mock_save, \
              patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
             
             mock_cache.return_value = None
-            mock_call.return_value = {"success": True, "content": '{"category": "pets"}'}
+            mock_call.return_value = {"success": True, "content": '{"category": "pets", "confidence": 0.95}'}
             
             await service.classify_image(image_bytes, prompt=prompt, use_cache=True)
             
@@ -826,6 +922,46 @@ class TestLLMServiceCache:
             assert call_args[1]["service_type"] == "classification"
             assert call_args[1]["provider"] == "aliyun"
             assert call_args[1]["model_id"] == "qwen-vl-plus"
+            
+            # 验证默认prompt保存的是原始内容（字符串）
+            saved_result = call_args[1]["result"]
+            assert isinstance(saved_result, str)
+            assert saved_result == '{"category": "pets", "confidence": 0.95}'
+            # 验证保存了is_default_prompt标记
+            assert call_args[1]["is_default_prompt"] is True
+    
+    @pytest.mark.asyncio
+    async def test_classify_image_save_to_cache_custom_prompt(self):
+        """测试分类服务成功时保存到缓存（自定义prompt：保存字符串）"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        custom_prompt = "Custom classification prompt"
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
+             patch.object(unified_llm_cache, 'save_result', new_callable=AsyncMock) as mock_save, \
+             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            
+            mock_cache.return_value = None
+            mock_call.return_value = {"success": True, "content": "Custom response text"}
+            
+            await service.classify_image(image_bytes, prompt=custom_prompt, use_cache=True)
+            
+            # 验证保存缓存被调用
+            mock_save.assert_called_once()
+            call_args = mock_save.call_args
+            assert call_args[1]["service_type"] == "classification"
+            
+            # 验证自定义prompt保存的是字符串
+            saved_result = call_args[1]["result"]
+            assert isinstance(saved_result, str)
+            assert saved_result == "Custom response text"
+            # 验证保存了is_default_prompt标记
+            assert call_args[1]["is_default_prompt"] is False
     
     @pytest.mark.asyncio
     async def test_edit_image_cache_hit(self):
@@ -899,6 +1035,8 @@ class TestLLMServiceCache:
             call_args = mock_save.call_args
             assert call_args[1]["service_type"] == "image_edit"
             assert call_args[1]["edit_type"] == edit_type
+            # 验证图像编辑服务is_default_prompt为None
+            assert call_args[1]["is_default_prompt"] is None
     
     @pytest.mark.asyncio
     async def test_classify_image_cache_disabled(self):
@@ -1008,6 +1146,8 @@ class TestLLMServiceCache:
             mock_save.assert_called_once()
             call_args = mock_save.call_args
             assert call_args[1]["service_type"] == "color_classification"
+            # 验证保存了is_default_prompt标记（默认prompt）
+            assert call_args[1]["is_default_prompt"] is True
     
     @pytest.mark.asyncio
     async def test_analyze_composition_cache_hit(self):
@@ -1063,6 +1203,8 @@ class TestLLMServiceCache:
             mock_save.assert_called_once()
             call_args = mock_save.call_args
             assert call_args[1]["service_type"] == "composition_analysis"
+            # 验证保存了is_default_prompt标记（默认prompt）
+            assert call_args[1]["is_default_prompt"] is True
     
     @pytest.mark.asyncio
     async def test_predict_face_fortune_cache_hit(self):
@@ -1135,6 +1277,284 @@ class TestLLMServiceCache:
             prompt = call_args[1]["prompt"]
             assert event in prompt
             assert time in prompt
+    
+    @pytest.mark.asyncio
+    async def test_predict_face_fortune_default_no_cache(self):
+        """测试面相预测服务默认不使用缓存"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        event = "我要去参加一个重要的面试"
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
+             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            
+            mock_call.return_value = {
+                "success": True,
+                "content": '{"eventAnalysis": {"status": "吉", "score": 85}}'
+            }
+            
+            # 默认use_cache=False，不应该查询缓存
+            result = await service.predict_face_fortune(
+                image_bytes=image_bytes,
+                event=event
+            )
+            
+            assert result["success"] is True
+            # 验证没有查询缓存
+            mock_cache.assert_not_called()
+            # 验证直接调用了API
+            mock_call.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_check_cache_with_is_default_prompt_marker(self):
+        """测试check_cache使用缓存中的is_default_prompt标记"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        prompt = settings.CLASSIFICATION_PROMPT
+        image_hash = "test_image_hash"
+        
+        # Mock缓存返回包含is_default_prompt标记的结果
+        cached_result = {
+            "result": '{"category": "pets", "confidence": 0.95}',
+            "status": "success",
+            "service_type": "classification",
+            "is_default_prompt": True  # 缓存中保存的标记
+        }
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = cached_result
+            
+            result = await service.check_cache(prompt=prompt, image_hash=image_hash)
+            
+            assert result is not None
+            assert result["cached"] is True
+            assert result["service_type"] == "classification"
+            assert result["content"] == '{"category": "pets", "confidence": 0.95}'
+            # 验证使用了缓存中的is_default_prompt标记进行解析
+            assert "parsed_result" in result
+            assert result["parsed_result"]["category"] == "pets"
+            assert result["parsed_result"]["confidence"] == 0.95
+    
+    @pytest.mark.asyncio
+    async def test_check_cache_fallback_to_string_comparison(self):
+        """测试check_cache回退到字符串比较（兼容旧缓存，没有is_default_prompt标记）"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        prompt = settings.CLASSIFICATION_PROMPT
+        image_hash = "test_image_hash"
+        
+        # Mock缓存返回旧格式（没有is_default_prompt标记）
+        cached_result = {
+            "result": '{"category": "pets", "confidence": 0.95}',
+            "status": "success",
+            "service_type": "classification"
+            # 没有is_default_prompt标记
+        }
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = cached_result
+            
+            result = await service.check_cache(prompt=prompt, image_hash=image_hash)
+            
+            assert result is not None
+            assert result["cached"] is True
+            assert result["service_type"] == "classification"
+            assert result["content"] == '{"category": "pets", "confidence": 0.95}'
+            # 验证回退到字符串比较，仍然解析了JSON
+            assert "parsed_result" in result
+            assert result["parsed_result"]["category"] == "pets"
+    
+    @pytest.mark.asyncio
+    async def test_check_cache_custom_prompt_no_parse(self):
+        """测试check_cache自定义prompt不解析"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        custom_prompt = "Custom classification prompt"
+        image_hash = "test_image_hash"
+        
+        # Mock缓存返回自定义prompt的结果
+        cached_result = {
+            "result": "Custom response text",
+            "status": "success",
+            "service_type": "classification",
+            "is_default_prompt": False  # 自定义prompt标记
+        }
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = cached_result
+            
+            result = await service.check_cache(prompt=custom_prompt, image_hash=image_hash)
+            
+            assert result is not None
+            assert result["cached"] is True
+            assert result["service_type"] == "classification"
+            assert result["content"] == "Custom response text"
+            # 验证自定义prompt不解析（没有parsed_result）
+            assert "parsed_result" not in result
+    
+    @pytest.mark.asyncio
+    async def test_check_cache_image_edit_service(self):
+        """测试check_cache图像编辑服务"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        prompt = "edit prompt"
+        image_hash = "test_image_hash"
+        
+        # Mock缓存返回图像编辑结果
+        cached_result = {
+            "result": "https://example.com/result.jpg",
+            "status": "success",
+            "service_type": "image_edit"
+        }
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = cached_result
+            
+            result = await service.check_cache(prompt=prompt, image_hash=image_hash)
+            
+            assert result is not None
+            assert result["cached"] is True
+            assert result["service_type"] == "image_edit"
+            assert result["result_url"] == "https://example.com/result.jpg"
+    
+    @pytest.mark.asyncio
+    async def test_check_cache_color_classification_with_marker(self):
+        """测试check_cache颜色分类服务使用is_default_prompt标记"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        prompt = settings.COLOR_CLASSIFICATION_PROMPT
+        image_hash = "test_image_hash"
+        
+        # Mock缓存返回包含is_default_prompt标记的结果
+        cached_result = {
+            "result": '{"background_color": "蓝色", "confidence": 0.9}',
+            "status": "success",
+            "service_type": "color_classification",
+            "is_default_prompt": True
+        }
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = cached_result
+            
+            result = await service.check_cache(prompt=prompt, image_hash=image_hash)
+            
+            assert result is not None
+            assert result["cached"] is True
+            assert result["service_type"] == "color_classification"
+            assert result["content"] == '{"background_color": "蓝色", "confidence": 0.9}'
+            # 验证使用了is_default_prompt标记进行解析
+            assert "parsed_result" in result
+    
+    @pytest.mark.asyncio
+    async def test_check_cache_composition_analysis_with_marker(self):
+        """测试check_cache构图分析服务使用is_default_prompt标记"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        prompt = settings.COMPOSITION_ANALYSIS_PROMPT
+        image_hash = "test_image_hash"
+        
+        # Mock缓存返回包含is_default_prompt标记的结果
+        cached_result = {
+            "result": '{"composition_type": "rule_of_thirds", "score": 8.5}',
+            "status": "success",
+            "service_type": "composition_analysis",
+            "is_default_prompt": True
+        }
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = cached_result
+            
+            result = await service.check_cache(prompt=prompt, image_hash=image_hash)
+            
+            assert result is not None
+            assert result["cached"] is True
+            assert result["service_type"] == "composition_analysis"
+            assert result["content"] == '{"composition_type": "rule_of_thirds", "score": 8.5}'
+            # 验证使用了is_default_prompt标记进行解析
+            assert "parsed_result" in result
+    
+    @pytest.mark.asyncio
+    async def test_check_cache_error_result(self):
+        """测试check_cache错误结果"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        prompt = "test prompt"
+        image_hash = "test_image_hash"
+        
+        # Mock缓存返回错误结果
+        cached_result = {
+            "status": "error",
+            "error": {
+                "type": "input_error",
+                "message": "Invalid image format",
+                "user_message": "输入参数有误"
+            },
+            "service_type": "classification"
+        }
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = cached_result
+            
+            result = await service.check_cache(prompt=prompt, image_hash=image_hash)
+            
+            assert result is not None
+            assert result["cached"] is True
+            assert result["success"] is False
+            assert result["service_type"] == "classification"
+            assert result["error"]["type"] == "input_error"
+            assert result["error"]["user_message"] == "输入参数有误"
+    
+    @pytest.mark.asyncio
+    async def test_check_cache_miss(self):
+        """测试check_cache缓存未命中"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        prompt = "test prompt"
+        image_hash = "test_image_hash"
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = None
+            
+            result = await service.check_cache(prompt=prompt, image_hash=image_hash)
+            
+            assert result is None
 
 
 class TestLLMServiceErrorHandling:

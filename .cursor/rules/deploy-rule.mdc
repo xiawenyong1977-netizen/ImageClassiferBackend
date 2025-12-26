@@ -1,0 +1,7 @@
+
+---
+服务器登录 ssh root@app (已经配置证书，无需密码)
+部署目录 /opt/ImageClassifierBackend
+配置信息 在部署目录下的.env文件中
+alwaysApply: true
+---

@@ -20,6 +20,12 @@ try:
 except ImportError as e:
     logger.warning(f"本地推理模块导入失败，将禁用本地推理功能: {e}")
     local_classify = None
+# 导入v2版本分类接口
+try:
+    from app.api import classify_v2
+except ImportError as e:
+    logger.warning(f"v2分类接口模块导入失败，v2接口不可用: {e}")
+    classify_v2 = None
 from app.api.auth import wechat_message_handler, wechat_verify
 
 
@@ -90,7 +96,9 @@ app.add_middleware(
 # 注册路由
 app.include_router(auth.router)
 app.include_router(user.router)  # 用户管理（额度查询）
-app.include_router(classify.router)
+app.include_router(classify.router)  # v1版本分类接口
+if classify_v2 is not None:
+    app.include_router(classify_v2.router)  # v2版本分类接口
 if local_classify is not None:
     app.include_router(local_classify.router)  # 本地模型推理
 app.include_router(config.router)  # 运行时配置
