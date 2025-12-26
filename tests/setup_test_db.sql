@@ -380,4 +380,28 @@ INSERT INTO city_name_mapping (name_zh, name_en, country_code) VALUES
 ('上海', 'Shanghai', 'CN'),
 ('纽约', 'New York', 'US')
 ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP;
+-- ====================================
+-- v2版本统一缓存表
+-- ====================================
+
+CREATE TABLE IF NOT EXISTS `llm_inference_cache_v2` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `prompt_hash` VARCHAR(64) NOT NULL COMMENT '提示词SHA-256哈希（分类服务：纯prompt；编辑服务：edit_type:prompt）',
+  `image_hash` VARCHAR(64) NOT NULL COMMENT '图像SHA-256哈希',
+  `model_results` JSON NOT NULL COMMENT '多模型推理结果集合',
+  `total_models` INT UNSIGNED DEFAULT 1 COMMENT '已缓存的模型数量',
+  `hit_count` INT UNSIGNED DEFAULT 1 COMMENT '缓存命中次数',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '首次创建时间',
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间',
+  `last_hit_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后命中时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_prompt_image` (`prompt_hash`, `image_hash`) COMMENT '组合唯一索引（prompt_hash + image_hash）',
+  KEY `idx_prompt_hash` (`prompt_hash`) COMMENT '提示词哈希索引',
+  KEY `idx_image_hash` (`image_hash`) COMMENT '图像哈希索引',
+  KEY `idx_hit_count` (`hit_count`) COMMENT '命中次数索引',
+  KEY `idx_last_hit` (`last_hit_at`) COMMENT '最后命中时间索引',
+  KEY `idx_created_at` (`created_at`) COMMENT '创建时间索引'
+) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci 
+COMMENT='统一大模型推理缓存表（v2版本，支持分类和编辑服务，多模型结果集合）';
+
 SELECT '测试数据库初始化完成！' AS 'Status';
