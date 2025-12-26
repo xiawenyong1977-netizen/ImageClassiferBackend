@@ -140,17 +140,21 @@ class TestBaseLLMService:
             max_retries=3
         )
         
-        # 设置认证失败错误（不可重试）
-        provider.should_fail = True
-        provider.fail_error = Exception("authentication failed")
+        # 设置认证失败错误（不可重试）- 使用LLMError并设置should_retry=False
+        auth_error = LLMError(
+            message="authentication failed",
+            error_type=LLMErrorType.AUTH_ERROR,
+            status_code=401,
+            should_retry=False
+        )
         
         async def mock_call_api(*args, **kwargs):
             provider.call_count += 1
-            raise Exception("authentication failed")
+            raise auth_error
         
         provider._call_api = mock_call_api
         
-        with pytest.raises(Exception, match="authentication failed"):
+        with pytest.raises(LLMError, match="authentication failed"):
             await provider.call_with_retry(
                 task_type="classification",
                 image_bytes=b"test_image",
@@ -176,14 +180,15 @@ class TestBaseLLMService:
         
         provider._call_api = mock_call_api
         
-        with pytest.raises(Exception, match="已重试 2 次"):
+        # 所有重试都失败后，会抛出LLMError，消息是原始错误消息
+        with pytest.raises(LLMError, match="timeout error"):
             await provider.call_with_retry(
                 task_type="classification",
                 image_bytes=b"test_image",
                 prompt="test prompt"
             )
         
-        assert provider.call_count == 2  # 重试了2次
+        assert provider.call_count == 2  # 重试了2次（max_retries=2，所以尝试1次+重试1次=总共2次）
     
     @pytest.mark.asyncio
     async def test_retry_with_different_error_types(self):
