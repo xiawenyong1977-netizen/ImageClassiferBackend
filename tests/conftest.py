@@ -61,32 +61,37 @@ async def setup_test_db():
                             current_statement = []
                     
                     # 执行所有SQL语句
-                    async with db.get_connection() as conn:
-                        async with conn.cursor() as cursor:
-                            for statement in statements:
-                                if statement:
-                                    # 跳过CREATE DATABASE语句（连接已指定数据库）
-                                    if statement.strip().upper().startswith('CREATE DATABASE'):
-                                        continue
-                                    # 跳过USE语句（连接已指定数据库）
-                                    if statement.strip().upper().startswith('USE '):
-                                        continue
-                                    # 跳过SELECT语句（只是显示状态）
-                                    if statement.strip().upper().startswith('SELECT ') and 'AS \'Status\'' in statement:
-                                        continue
-                                    try:
-                                        await cursor.execute(statement)
-                                    except Exception as e:
-                                        # 忽略表已存在的错误和重复键错误
-                                        error_str = str(e).lower()
-                                        if any(keyword in error_str for keyword in ["already exists", "duplicate", "table"]):
-                                            # 表已存在或重复键，这是正常的，忽略
-                                            pass
-                                        else:
-                                            # 对于其他错误，记录警告但不中断测试
-                                            import warnings
-                                            warnings.warn(f"执行SQL语句时出现警告: {e}\n语句: {statement[:100]}")
-                            await conn.commit()
+                    import warnings
+                    # 过滤MySQL警告（如表已存在等），这些是正常的
+                    # 使用更精确的过滤：过滤所有来自aiomysql的警告，以及包含"already exists"的警告
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings('ignore', category=Warning, module='aiomysql')
+                        warnings.filterwarnings('ignore', message='.*already exists.*', category=Warning)
+                        async with db.get_connection() as conn:
+                            async with conn.cursor() as cursor:
+                                for statement in statements:
+                                    if statement:
+                                        # 跳过CREATE DATABASE语句（连接已指定数据库）
+                                        if statement.strip().upper().startswith('CREATE DATABASE'):
+                                            continue
+                                        # 跳过USE语句（连接已指定数据库）
+                                        if statement.strip().upper().startswith('USE '):
+                                            continue
+                                        # 跳过SELECT语句（只是显示状态）
+                                        if statement.strip().upper().startswith('SELECT ') and 'AS \'Status\'' in statement:
+                                            continue
+                                        try:
+                                            await cursor.execute(statement)
+                                        except Exception as e:
+                                            # 忽略表已存在的错误和重复键错误
+                                            error_str = str(e).lower()
+                                            if any(keyword in error_str for keyword in ["already exists", "duplicate", "table"]):
+                                                # 表已存在或重复键，这是正常的，忽略
+                                                pass
+                                            else:
+                                                # 对于其他错误，记录警告但不中断测试
+                                                warnings.warn(f"执行SQL语句时出现警告: {e}\n语句: {statement[:100]}")
+                                await conn.commit()
                 except Exception as e:
                     # 如果初始化脚本执行失败，记录警告但不中断测试
                     import warnings

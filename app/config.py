@@ -191,25 +191,25 @@ class Settings(BaseSettings):
 - complianceReason：合规性说明（如不合规需说明原因）
 
 请以严格的JSON格式返回结果，不得包含Markdown标签：
-{{
+{
     "isCompliant": true,
     "complianceReason": "内容合规",
-    "faceAnalysis": {{
+    "faceAnalysis": {
         "forehead": "额头分析（50字以内）",
         "eyes": "眼睛分析（50字以内）",
         "nose": "鼻子分析（50字以内）",
         "mouth": "嘴巴分析（50字以内）",
         "overall": "整体面相分析（100字以内）"
-    }},
-    "eventAnalysis": {{
+    },
+    "eventAnalysis": {
         "status": "大吉/吉/中平/小凶/凶",
         "score": 85,
         "summary": "对该事项的总体预测（100字以内）",
         "advice": ["建议1（30字以内）", "建议2（30字以内）"],
         "remedy": "化解方法（50字以内，如无不利可为空字符串）"
-    }},
+    },
     "timeReflection": "时间反思（100字以内）"
-}}
+}
 
 只返回JSON，不要有其他文字。""",
         description="面相预测提示词"

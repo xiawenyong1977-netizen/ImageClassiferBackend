@@ -118,17 +118,26 @@ class Database:
                     pass
                 # 重新创建连接池（会在当前事件循环中创建）
                 self.pool = None
-                await self.connect()
+                try:
+                    await self.connect()
+                except Exception as connect_err:
+                    logger.error(f"重新创建数据库连接池失败: {connect_err}")
+                    raise RuntimeError(f"无法重新创建数据库连接池: {connect_err}") from e
+                
                 # 重试获取连接
-                async with self.pool.acquire() as conn:
-                    try:
-                        await conn.ping()
-                        async with conn.cursor() as cursor:
-                            await cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
-                            await cursor.execute("SET autocommit=1")
-                    except Exception as e2:
-                        logger.warning(f"数据库连接会话初始化失败: {e2}")
-                    yield conn
+                try:
+                    async with self.pool.acquire() as conn:
+                        try:
+                            await conn.ping()
+                            async with conn.cursor() as cursor:
+                                await cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
+                                await cursor.execute("SET autocommit=1")
+                        except Exception as e2:
+                            logger.warning(f"数据库连接会话初始化失败: {e2}")
+                        yield conn
+                except Exception as acquire_err:
+                    logger.error(f"重试获取数据库连接失败: {acquire_err}")
+                    raise RuntimeError(f"重试获取数据库连接失败: {acquire_err}") from e
             elif "event loop is closed" in error_msg:
                 logger.error("数据库操作失败：事件循环已关闭（可能是测试环境问题）")
                 raise RuntimeError("数据库操作失败：事件循环已关闭。请确保在异步上下文中使用数据库操作。")

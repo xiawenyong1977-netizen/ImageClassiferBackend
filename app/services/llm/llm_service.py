@@ -552,10 +552,11 @@ class LLMService:
         # 构建完整的提示词（替换占位符）
         if prompt is None:
             prompt_template = settings.FACE_FORTUNE_PROMPT
-            prompt = prompt_template.format(time=time, event=event)
+            # 使用 replace 而不是 format，避免 JSON 中的花括号转义问题
+            prompt = prompt_template.replace("{time}", time).replace("{event}", event)
         else:
             # 如果提供了自定义提示词，也需要替换占位符
-            prompt = prompt.format(time=time, event=event)
+            prompt = prompt.replace("{time}", time).replace("{event}", event)
         
         # 计算image_hash
         image_hash = HashUtils.calculate_sha256(image_bytes)
@@ -877,8 +878,18 @@ class LLMService:
             # 使用用户提供的API Key（如果构造函数中提供了）
             deepseek_api_key = kwargs.get('api_key', self.api_key)
             if not deepseek_api_key:
-                # 如果没有提供API Key，使用默认的Deepseek API Key
-                deepseek_api_key = "sk-b55b7e703b0e45c1b326cb0a5e04fb2a"
+                # 如果没有提供API Key，记录错误日志并返回
+                logger.error("文本生成失败：未提供Deepseek API Key")
+                return {
+                    "success": False,
+                    "error": {
+                        "type": LLMErrorType.AUTH_ERROR.value,
+                        "message": "未提供Deepseek API Key",
+                        "user_message": "服务暂时不可用，请稍后重试",
+                        "status_code": None,
+                        "error_code": None
+                    }
+                }
             
             adapter = DeepseekProvider(
                 provider="deepseek",
