@@ -41,8 +41,8 @@ async def setup_test_db():
             sql_file = Path(__file__).parent / "setup_test_db.sql"
             if sql_file.exists():
                 try:
-                    # 读取SQL文件
-                    sql_content = sql_file.read_text(encoding='utf-8')
+                    # 读取SQL文件（移除BOM字符）
+                    sql_content = sql_file.read_text(encoding='utf-8-sig')  # utf-8-sig会自动移除BOM
                     
                     # 移除注释和空行，按分号分割SQL语句
                     statements = []
@@ -65,6 +65,9 @@ async def setup_test_db():
                         async with conn.cursor() as cursor:
                             for statement in statements:
                                 if statement:
+                                    # 跳过CREATE DATABASE语句（连接已指定数据库）
+                                    if statement.strip().upper().startswith('CREATE DATABASE'):
+                                        continue
                                     # 跳过USE语句（连接已指定数据库）
                                     if statement.strip().upper().startswith('USE '):
                                         continue

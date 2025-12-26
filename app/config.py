@@ -4,7 +4,7 @@
 """
 
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, ConfigDict
 from typing import List
 
 
@@ -182,10 +182,11 @@ class Settings(BaseSettings):
         """获取允许的图片格式列表"""
         return [fmt.strip().lower() for fmt in self.ALLOWED_IMAGE_FORMATS.split(",")]
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True
+    )
 
 
 # 全局配置实例

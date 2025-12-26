@@ -31,7 +31,7 @@ class Coordinate(BaseModel):
 
 class BatchNearestCityRequest(BaseModel):
     """批量查询最近城市请求"""
-    coordinates: List[Coordinate] = Field(..., min_items=1, max_items=500, description="坐标点列表，最多500个")
+    coordinates: List[Coordinate] = Field(..., min_length=1, max_length=500, description="坐标点列表，最多500个")
     user_id: Optional[str] = Field(None, description="用户ID（可选）")
 
 
