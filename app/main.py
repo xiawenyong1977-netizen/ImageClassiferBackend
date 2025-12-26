@@ -26,6 +26,12 @@ try:
 except ImportError as e:
     logger.warning(f"v2分类接口模块导入失败，v2接口不可用: {e}")
     classify_v2 = None
+# 导入v2版本图像编辑接口
+try:
+    from app.api import image_edit_v2
+except ImportError as e:
+    logger.warning(f"v2图像编辑接口模块导入失败，v2接口不可用: {e}")
+    image_edit_v2 = None
 from app.api.auth import wechat_message_handler, wechat_verify
 
 
@@ -111,7 +117,9 @@ try:
     app.include_router(location_v2.router)  # 地理位置API v2版本
 except ImportError:
     logger.warning("location_v2模块导入失败，v2接口不可用")
-app.include_router(image_edit.router)  # 图像编辑
+app.include_router(image_edit.router)  # 图像编辑（v1版本）
+if image_edit_v2 is not None:
+    app.include_router(image_edit_v2.router)  # 图像编辑（v2版本）
 app.include_router(payment.router)  # 支付功能
 
 # 微信公众号服务器配置验证接口（GET请求）

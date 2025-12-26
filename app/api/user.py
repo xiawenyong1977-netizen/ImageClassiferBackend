@@ -8,6 +8,7 @@ import logging
 import aiomysql
 
 from app.database import db
+from app.services.credits_usage_service import credits_usage_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/user", tags=["用户"])
@@ -189,43 +190,35 @@ async def get_credits_usage(
     返回最近的额度消费历史记录
     """
     try:
-        async with db.get_connection() as conn:
-            async with conn.cursor(aiomysql.DictCursor) as cursor:
-                await cursor.execute(
-                    """SELECT id, task_id, task_type, credits_used, 
-                              request_image_count, success_image_count, created_at
-                       FROM credits_usage 
-                       WHERE openid = %s
-                       ORDER BY created_at DESC
-                       LIMIT %s""",
-                    (x_wechat_openid, limit)
-                )
-                records = await cursor.fetchall()
-                
-                # 转换为可序列化的格式
-                result = []
-                for record in records:
-                    result.append({
-                        "id": record['id'],
-                        "task_id": record['task_id'],
-                        "task_type": record['task_type'],
-                        "credits_used": record['credits_used'],
-                        "request_image_count": record.get('request_image_count', record['credits_used']),
-                        "success_image_count": record.get('success_image_count', record['credits_used']),
-                        "created_at": str(record['created_at']) if record['created_at'] else None
-                    })
-                
-                # 设置防缓存响应头
-                response_data = {
-                    "success": True,
-                    "data": result,
-                    "count": len(result)
-                }
-                response = JSONResponse(content=response_data)
-                response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-                response.headers["Pragma"] = "no-cache"
-                response.headers["Expires"] = "0"
-                return response
+        records = await credits_usage_service.get_usage_by_openid(
+            openid=x_wechat_openid,
+            limit=limit
+        )
+        
+        # 转换为可序列化的格式
+        result = []
+        for record in records:
+            result.append({
+                "id": record['id'],
+                "task_id": record['task_id'],
+                "task_type": record['task_type'],
+                "credits_used": record['credits_used'],
+                "request_image_count": record.get('request_image_count', record['credits_used']),
+                "success_image_count": record.get('success_image_count', record['credits_used']),
+                "created_at": str(record['created_at']) if record['created_at'] else None
+            })
+        
+        # 设置防缓存响应头
+        response_data = {
+            "success": True,
+            "data": result,
+            "count": len(result)
+        }
+        response = JSONResponse(content=response_data)
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
                 
     except Exception as e:
         logger.error(f"查询额度消费记录失败: {e}", exc_info=True)
