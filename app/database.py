@@ -58,8 +58,29 @@ class Database:
     @asynccontextmanager
     async def get_connection(self):
         """获取数据库连接（上下文管理器）"""
+        # 如果连接池不存在或绑定到了不同的事件循环，重新创建
+        import asyncio
+        current_loop = asyncio.get_running_loop()
+        
         if not self.pool:
             await self.connect()
+        else:
+            # 检查连接池是否绑定到当前事件循环
+            # 如果pool是在不同的事件循环中创建的，需要重新创建
+            try:
+                # 尝试检查pool的内部状态（aiomysql的pool._loop）
+                pool_loop = getattr(self.pool, '_loop', None)
+                if pool_loop is not None and pool_loop != current_loop:
+                    logger.warning("检测到数据库连接池绑定到不同的事件循环，重新创建连接池")
+                    try:
+                        self.pool.close()
+                        await self.pool.wait_closed()
+                    except Exception:
+                        pass
+                    await self.connect()
+            except Exception:
+                # 如果检查失败，假设连接池可用，继续使用
+                pass
         
         try:
             async with self.pool.acquire() as conn:
@@ -73,12 +94,38 @@ class Database:
                     logger.warning(f"数据库连接会话初始化失败: {e}")
                 yield conn
         except RuntimeError as e:
-            # 如果事件循环已关闭，抛出更友好的错误
+            # 检查是否是事件循环问题
             error_msg = str(e).lower()
-            if "event loop is closed" in error_msg:
+            if "attached to a different loop" in error_msg:
+                # 如果是事件循环不匹配问题，尝试重新创建连接池
+                logger.warning("检测到事件循环不匹配，重新创建连接池")
+                try:
+                    if self.pool:
+                        try:
+                            self.pool.close()
+                            await self.pool.wait_closed()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                # 重新创建连接池（会在当前事件循环中创建）
+                self.pool = None
+                await self.connect()
+                # 重试获取连接
+                async with self.pool.acquire() as conn:
+                    try:
+                        await conn.ping()
+                        async with conn.cursor() as cursor:
+                            await cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
+                            await cursor.execute("SET autocommit=1")
+                    except Exception as e2:
+                        logger.warning(f"数据库连接会话初始化失败: {e2}")
+                    yield conn
+            elif "event loop is closed" in error_msg:
                 logger.error("数据库操作失败：事件循环已关闭（可能是测试环境问题）")
                 raise RuntimeError("数据库操作失败：事件循环已关闭。请确保在异步上下文中使用数据库操作。")
-            raise
+            else:
+                raise
     
     @asynccontextmanager
     async def get_cursor(self):

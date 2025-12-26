@@ -351,6 +351,7 @@ async def query_single_coordinate(coord: Coordinate) -> CityQueryResult:
         city_data = await query_local_db(latitude, longitude, max_distance_km=3.0)
         
         if city_data:
+            logger.debug(f"本地数据库命中: ({latitude}, {longitude}) -> {city_data.get('name_en')}")
             # 本地数据库命中
             query_time_ms = int((time.time() - start_time) * 1000)
             
@@ -719,8 +720,10 @@ async def batch_get_nearest_cities_v2(
     try:
         # 批量查询所有坐标点
         import asyncio
+        logger.info(f"开始批量查询 {len(request_body.coordinates)} 个坐标点")
         tasks = [query_single_coordinate(coord) for coord in request_body.coordinates]
         results = await asyncio.gather(*tasks)
+        logger.info(f"批量查询完成，成功: {sum(1 for r in results if r.success)}, 失败: {sum(1 for r in results if not r.success)}")
         
         # 统计结果
         success_count = sum(1 for r in results if r.success)

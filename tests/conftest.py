@@ -5,7 +5,7 @@ import pytest
 import os
 from pathlib import Path
 from fastapi.testclient import TestClient
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from app.main import app
 from app.auth import create_access_token
 from app.config import settings
@@ -33,16 +33,21 @@ async def setup_test_db():
     # 如果使用测试数据库，尝试连接
     if test_db.endswith("_test"):
         try:
-            # 这里可以初始化测试数据库
-            # 例如：创建表、插入测试数据等
-            pass
+            # 初始化数据库连接池（session级别，所有测试共享）
+            if not db.pool:
+                await db.connect()
         except Exception as e:
             pytest.skip(f"测试数据库不可用: {e}")
     
     yield
     
-    # 测试后的清理工作（可选）
-    # 例如：清理测试数据
+    # 测试session结束后，关闭数据库连接池
+    if db.pool:
+        try:
+            await db.disconnect()
+        except Exception:
+            # 忽略清理时的错误
+            pass
 
 
 @pytest.fixture
@@ -52,9 +57,19 @@ def client():
 
 
 @pytest.fixture
-async def async_client():
-    """异步测试客户端fixture（推荐用于需要数据库的测试）"""
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+async def async_client(setup_test_db):
+    """
+    异步测试客户端fixture（推荐用于需要数据库的测试）
+    
+    注意：ASGITransport 会创建新的事件循环，导致数据库连接池的事件循环不匹配
+    解决方法：让每个请求在FastAPI的lifespan中重新初始化连接池，或使用lifespan参数
+    """
+    # 使用 ASGITransport，它会自动调用 FastAPI 的 lifespan（如果使用 root_path 参数）
+    # 但我们不在这里管理连接池，让 lifespan 管理它
+    # 如果连接池已在不同的循环中创建，get_connection 会自动检测并重新创建
+    
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 
 
