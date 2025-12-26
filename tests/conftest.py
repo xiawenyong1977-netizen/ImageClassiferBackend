@@ -99,10 +99,22 @@ async def setup_test_db():
     # 测试session结束后，关闭数据库连接池
     if db.pool:
         try:
-            await db.disconnect()
+            import asyncio
+            # 检查事件循环是否还在运行
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_closed():
+                    # 事件循环已关闭，直接设置pool为None
+                    db.pool = None
+                else:
+                    # 事件循环还在运行，正常关闭连接池
+                    await db.disconnect()
+            except RuntimeError:
+                # 没有运行中的事件循环，直接设置pool为None
+                db.pool = None
         except Exception:
-            # 忽略清理时的错误
-            pass
+            # 忽略清理时的错误，确保pool被设置为None
+            db.pool = None
 
 
 @pytest.fixture
