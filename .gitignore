@@ -62,6 +62,9 @@ temp/
 htmlcov/
 .tox/
 
+# Docker
+docker-compose.override.yml
+
 # 其他
 .mypy_cache/
 .dmypy.json
