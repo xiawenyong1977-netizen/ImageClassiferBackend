@@ -385,33 +385,38 @@ class TestLLMService:
             model="qwen-vl-plus"
         )
         
-        # Mock AliyunProvider的创建和调用（在llm_service模块中patch，因为它是从providers导入的）
-        with patch('app.services.llm.llm_service.AliyunProvider') as mock_provider_class:
-            mock_adapter = MagicMock()
-            mock_adapter.call_with_retry = AsyncMock(return_value={
-                "success": True,
-                "result_url": "https://example.com/result.jpg"
-            })
-            mock_provider_class.return_value = mock_adapter
-            
-            # 使用不同的模型
-            result = await service.edit_image(
-                image_bytes=b"test_image",
-                prompt="edit prompt",
-                edit_type="enhance",
-                model="qwen-image-edit"
-            )
-            
-            assert result["success"] is True
-            # 验证创建了新的适配器（使用指定的模型）
-            # 注意：由于在edit_image中会创建新的AliyunProvider实例，所以会被调用
-            assert mock_provider_class.called
-            # 检查最后一次调用的参数（因为可能被调用多次）
-            if mock_provider_class.call_count > 0:
-                call_kwargs = mock_provider_class.call_args[1] if mock_provider_class.call_args else {}
+        # 创建一个新的mock适配器来模拟使用不同模型的情况
+        mock_new_adapter = MagicMock()
+        mock_new_adapter.call_with_retry = AsyncMock(return_value={
+            "success": True,
+            "result_url": "https://example.com/result.jpg"
+        })
+        
+        # 直接patch providers模块中的AliyunProvider类（使用字符串路径）
+        # 因为AliyunProvider是在llm_service中从providers导入的，我们需要patch原始模块
+        with patch('app.services.llm.providers.AliyunProvider', return_value=mock_new_adapter) as mock_provider:
+            # 但是，由于llm_service已经导入了AliyunProvider，我们需要重新导入
+            # 或者，我们可以直接patch llm_service模块中已导入的AliyunProvider
+            # 使用字符串路径patch已导入的类
+            with patch('app.services.llm.llm_service.AliyunProvider', return_value=mock_new_adapter) as mock_provider_in_module:
+                # 使用不同的模型
+                result = await service.edit_image(
+                    image_bytes=b"test_image",
+                    prompt="edit prompt",
+                    edit_type="enhance",
+                    model="qwen-image-edit"
+                )
+                
+                assert result["success"] is True
+                # 验证创建了新的适配器（使用指定的模型）
+                # 由于model != self.model，会创建新的AliyunProvider实例
+                assert mock_provider_in_module.called or mock_provider.called
+                # 验证使用了指定的模型
+                called_provider = mock_provider_in_module if mock_provider_in_module.called else mock_provider
+                call_kwargs = called_provider.call_args[1] if called_provider.call_args else {}
                 if "model" in call_kwargs:
-                    assert call_kwargs["model"] == "qwen-image-edit"
-            mock_adapter.call_with_retry.assert_called_once()
+                    assert call_kwargs.get("model") == "qwen-image-edit"
+                mock_new_adapter.call_with_retry.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_edit_image_with_non_aliyun_provider(self):
@@ -422,7 +427,7 @@ class TestLLMService:
             model="gpt-4-vision-preview"
         )
         
-        # Mock logger（在llm_service模块中，因为logger是从loguru导入的）
+        # Mock logger（使用字符串路径，兼容Python 3.8）
         with patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call, \
              patch('app.services.llm.llm_service.logger') as mock_logger:
             mock_call.return_value = {
