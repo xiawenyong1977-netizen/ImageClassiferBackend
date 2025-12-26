@@ -189,40 +189,172 @@ class BaseLLMService(ABC):
         if isinstance(error, LLMError):
             return error
         
-        # 判断错误类型
+        # 判断错误类型（根据阿里云DashScope API文档）
         if status_code == 400:
-            # 400错误需要进一步判断是输入错误还是业务逻辑错误
-            if any(keyword in error_str for keyword in [
-                'invalidparameter', 'invalidimage', 'imagetoolarge',
-                'contentviolation', 'prompttoolong', 'invalid format',
-                'image length and width', 'image size'
-            ]):
+            # 400 - InvalidParameter：参数错误或格式错误
+            # 根据阿里云DashScope API文档，400错误都是参数/输入错误，不应重试
+            # 识别常见的400错误关键词（扩展版，覆盖所有文档中的错误类型）
+            input_error_keywords = [
+                # 参数相关
+                'invalidparameter', 'invalid parameter', 'parameter', 'required parameter',
+                'enable_thinking', 'thinking_budget', 'stream mode', 'enable_search',
+                'incremental_output', 'source_lang', 'target_lang',
+                'field required', 'missing required', 'missing parameter',
+                # 输入长度相关
+                'range of input length', 'range of max_tokens', 'token length exceed',
+                'input length', 'max_tokens', 'too many files', 'exceeds size limit',
+                'exceeds page limits', 'exceeded limit', 'too short', 'too large',
+                'too long', 'too small', 'exceed', 'beyond limit',
+                # 参数值范围相关
+                'temperature should be', 'temperature must be', 'range of top_p',
+                'top_p must be', 'top_k be greater', 'repetition_penalty',
+                'presence_penalty', 'range of n', 'range of seed',
+                'must be', 'should be', 'must be between', 'should be in',
+                # 格式相关
+                'invalid format', 'invalid file', 'format is not supported',
+                'format is illegal', 'cannot be opened', 'failed to decode',
+                'read image error', 'read video error', 'decode error',
+                'file format', 'image format', 'audio format', 'video format',
+                # 图像相关
+                'invalidimage', 'imagetoolarge', 'image length and width',
+                'image size', 'multimodal file size', 'sequence images',
+                'video modality', 'data-uri item', 'image resolution',
+                'image size is not supported', 'image resolution is invalid',
+                'image content does not comply', 'image has no human',
+                # 内容相关
+                'contentviolation', 'prompttoolong', 'content must be',
+                'content field is required', 'input content must be',
+                'messages with role', 'input must contain', 'input should be',
+                'content length', 'messages length', 'no messages found',
+                'lack of image or text', 'input messages do not contain',
+                # 模型相关
+                'model not exist', 'model only support', 'model does not support',
+                'model cannot be set', 'model restrictions', 'model not found',
+                'unsupported model', 'model unavailable',
+                # 文件相关
+                'file parsing', 'file format', 'file cannot be found',
+                'file content blank', 'file_urls', 'invalid file',
+                'file size', 'file duration', 'file ratio', 'file sample rate',
+                'file download', 'download failed', 'download timeout',
+                'file not found', 'file too large', 'file too small',
+                # URL相关
+                'url error', 'invalid url', 'url does not appear',
+                'connection refused', 'download timeout', 'connection timeout',
+                # 音频相关
+                'audio is empty', 'audio format', 'voice', 'audio length',
+                'audio duration', 'audio rate', 'audio silent', 'audio short',
+                'audio preprocess', 'audio decoder', 'audio file',
+                # 视频相关
+                'video file', 'video resolution', 'video fps', 'video duration',
+                'video modality', 'video format',
+                # 其他参数错误
+                'request method', 'required body invalid', 'body format',
+                'messages must contain', 'tool names', 'tool call',
+                'result_format', 'stop parameter', 'batch size',
+                'download', 'media resource', 'data inspection',
+                'input json error', 'json error', 'invalid json',
+                'check input data', 'invalid value', 'invalid schema',
+                'invalid garment', 'invalid bbox', 'invalid style',
+                'driven not exist', 'missing training files',
+                # 内容合规相关
+                'inappropriate content', 'green network', 'ip infringement',
+                'faq rule blocked', 'custom role blocked',
+                # 配额相关
+                'quota exceeded', 'allocation quota', 'free tier',
+                # 其他
+                'request parameter is invalid', 'parameter is invalid',
+                'parameter missing', 'parameter out of range',
+                'unsupported operation', 'client disconnect',
+                'service unavailable error', 'bad request'
+            ]
+            
+            # 检查是否是输入/参数错误
+            # 根据阿里云文档，所有400错误都是参数/输入错误，不应重试
+            if any(keyword in error_str for keyword in input_error_keywords):
                 return LLMError(
                     message=error_message,
                     error_type=LLMErrorType.INPUT_ERROR,
                     status_code=status_code,
                     error_code=error_code,
-                    should_retry=False  # 输入错误不重试
+                    should_retry=False  # 400错误都是参数/输入错误，不重试
                 )
             else:
+                # 其他400错误也归类为输入错误（根据阿里云文档，400都是参数错误）
                 return LLMError(
                     message=error_message,
-                    error_type=LLMErrorType.BUSINESS_ERROR,
+                    error_type=LLMErrorType.INPUT_ERROR,
                     status_code=status_code,
                     error_code=error_code,
-                    should_retry=False
+                    should_retry=False  # 400错误不重试
                 )
         
-        elif status_code in [401, 403]:
+        elif status_code == 401:
+            # 401 - 认证失败：API key 错误，认证失败
+            # 包括：InvalidApiKey, invalid_api_key, NOT AUTHORIZED
             return LLMError(
                 message=error_message,
                 error_type=LLMErrorType.AUTH_ERROR,
                 status_code=status_code,
                 error_code=error_code,
-                should_retry=False
+                should_retry=False  # 认证错误不重试
+            )
+        
+        elif status_code == 403:
+            # 403 - 访问被拒绝：无权限访问资源
+            # 包括：AccessDenied, access_denied, Model.AccessDenied, App.AccessDenied等
+            return LLMError(
+                message=error_message,
+                error_type=LLMErrorType.AUTH_ERROR,
+                status_code=status_code,
+                error_code=error_code,
+                should_retry=False  # 权限错误不重试
+            )
+        
+        elif status_code == 402:
+            # 402 - 余额不足：账号余额不足（如果支持）
+            return LLMError(
+                message=error_message,
+                error_type=LLMErrorType.BUSINESS_ERROR,
+                status_code=status_code,
+                error_code=error_code,
+                should_retry=False  # 余额不足不重试
+            )
+        
+        elif status_code == 404:
+            # 404 - 资源不存在：模型不存在、工作空间不存在等
+            # 包括：ModelNotFound, model_not_found, WorkSpaceNotFound, NotFound
+            return LLMError(
+                message=error_message,
+                error_type=LLMErrorType.BUSINESS_ERROR,
+                status_code=status_code,
+                error_code=error_code,
+                should_retry=False  # 资源不存在不重试
+            )
+        
+        elif status_code == 409:
+            # 409 - 冲突：资源已存在等
+            # 包括：Conflict（模型实例已存在）
+            return LLMError(
+                message=error_message,
+                error_type=LLMErrorType.BUSINESS_ERROR,
+                status_code=status_code,
+                error_code=error_code,
+                should_retry=False  # 冲突错误不重试
+            )
+        
+        elif status_code == 422:
+            # 422 - 参数错误：请求体参数错误
+            return LLMError(
+                message=error_message,
+                error_type=LLMErrorType.INPUT_ERROR,
+                status_code=status_code,
+                error_code=error_code,
+                should_retry=False  # 参数错误不重试
             )
         
         elif status_code == 429:
+            # 429 - 请求速率达到上限：TPM 或 RPM 达到上限
+            # 包括：Throttling, RateQuota, BurstRate, AllocationQuota等
             return LLMError(
                 message=error_message,
                 error_type=LLMErrorType.RATE_LIMIT_ERROR,
@@ -231,7 +363,30 @@ class BaseLLMService(ABC):
                 should_retry=True  # 限流错误可重试
             )
         
+        elif status_code == 500:
+            # 500 - 服务器内部错误：内部算法错误、服务异常等
+            # 包括：InternalError, internal_error, SystemError, ModelServiceFailed等
+            return LLMError(
+                message=error_message,
+                error_type=LLMErrorType.SERVER_ERROR,
+                status_code=status_code,
+                error_code=error_code,
+                should_retry=True  # 服务器内部错误可重试
+            )
+        
+        elif status_code == 503:
+            # 503 - 服务不可用：服务器繁忙、模型不可用等
+            # 包括：ModelServingError, ModelUnavailable
+            return LLMError(
+                message=error_message,
+                error_type=LLMErrorType.SERVER_ERROR,
+                status_code=status_code,
+                error_code=error_code,
+                should_retry=True  # 服务器繁忙可重试
+            )
+        
         elif status_code and status_code >= 500:
+            # 其他5xx错误：服务器故障
             return LLMError(
                 message=error_message,
                 error_type=LLMErrorType.SERVER_ERROR,

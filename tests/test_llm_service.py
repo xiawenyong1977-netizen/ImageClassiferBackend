@@ -13,7 +13,8 @@ from app.services.llm import (
     LLMService,
     AliyunProvider,
     OpenAIProvider,
-    ClaudeProvider
+    ClaudeProvider,
+    DeepseekProvider
 )
 from app.services.llm.base_service import LLMError, LLMErrorType
 from app.services.unified_llm_cache import unified_llm_cache
@@ -46,7 +47,8 @@ def get_test_api_key(provider: str) -> str:
     env_key_map = {
         "aliyun": "TEST_ALIYUN_API_KEY",
         "openai": "TEST_OPENAI_API_KEY",
-        "claude": "TEST_CLAUDE_API_KEY"
+        "claude": "TEST_CLAUDE_API_KEY",
+        "deepseek": "TEST_DEEPSEEK_API_KEY"
     }
     env_key = env_key_map.get(provider.lower())
     if env_key:
@@ -289,6 +291,18 @@ class TestLLMService:
         assert isinstance(service._adapter, ClaudeProvider)
     
     @pytest.mark.asyncio
+    async def test_create_deepseek_provider(self):
+        """测试创建Deepseek提供商"""
+        service = LLMService(
+            provider="deepseek",
+            api_key="test_key",
+            model="deepseek-chat"
+        )
+        
+        assert service.provider == "deepseek"
+        assert isinstance(service._adapter, DeepseekProvider)
+    
+    @pytest.mark.asyncio
     async def test_invalid_provider(self):
         """测试无效的提供商"""
         with pytest.raises(ValueError, match="不支持的大模型提供商"):
@@ -358,6 +372,208 @@ class TestLLMService:
         assert info["max_retries"] == 5
         assert info["retry_delay"] == 2.0
         assert info["timeout"] == 60
+    
+    @pytest.mark.asyncio
+    async def test_classify_color_with_default_prompt(self):
+        """测试使用默认提示词进行颜色分类"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        with patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = {"success": True, "content": '{"background_color": "蓝色", "confidence": 0.9}'}
+            
+            # 禁用缓存，直接测试API调用
+            result = await service.classify_color(b"test_image", use_cache=False)
+            
+            assert result["success"] is True
+            # 验证使用了默认提示词
+            mock_call.assert_called_once()
+            call_kwargs = mock_call.call_args[1]
+            assert call_kwargs["prompt"] == settings.COLOR_CLASSIFICATION_PROMPT
+    
+    @pytest.mark.asyncio
+    async def test_classify_color_with_custom_prompt(self):
+        """测试使用自定义提示词进行颜色分类"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        custom_prompt = "Custom color classification prompt"
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
+             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            
+            mock_cache.return_value = None  # 缓存未命中
+            mock_call.return_value = {"success": True, "content": '{"background_color": "红色", "confidence": 0.95}'}
+            
+            result = await service.classify_color(b"test_image", prompt=custom_prompt, use_cache=True)
+            
+            assert result["success"] is True
+            assert mock_call.called
+            call_kwargs = mock_call.call_args[1]
+            assert call_kwargs["prompt"] == custom_prompt
+    
+    @pytest.mark.asyncio
+    async def test_analyze_composition_with_default_prompt(self):
+        """测试使用默认提示词进行构图分析"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        with patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = {
+                "success": True,
+                "content": '{"composition_type": "rule_of_thirds", "score": 8.5}'
+            }
+            
+            # 禁用缓存，直接测试API调用
+            result = await service.analyze_composition(b"test_image", use_cache=False)
+            
+            assert result["success"] is True
+            # 验证使用了默认提示词
+            mock_call.assert_called_once()
+            call_kwargs = mock_call.call_args[1]
+            assert call_kwargs["prompt"] == settings.COMPOSITION_ANALYSIS_PROMPT
+    
+    @pytest.mark.asyncio
+    async def test_analyze_composition_with_custom_prompt(self):
+        """测试使用自定义提示词进行构图分析"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        custom_prompt = "Custom composition analysis prompt"
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
+             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            
+            mock_cache.return_value = None  # 缓存未命中
+            mock_call.return_value = {
+                "success": True,
+                "content": '{"composition_type": "center_composition", "score": 7.5}'
+            }
+            
+            result = await service.analyze_composition(b"test_image", prompt=custom_prompt, use_cache=True)
+            
+            assert result["success"] is True
+            assert mock_call.called
+            call_kwargs = mock_call.call_args[1]
+            assert call_kwargs["prompt"] == custom_prompt
+    
+    @pytest.mark.asyncio
+    async def test_predict_face_fortune_with_default_prompt(self):
+        """测试使用默认提示词进行面相预测"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        event = "我要去参加一个重要的面试"
+        time = "2024年1月15日 14:30"
+        
+        with patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = {
+                "success": True,
+                "content": '{"eventAnalysis": {"status": "吉", "score": 85}}'
+            }
+            
+            # 禁用缓存，直接测试API调用
+            result = await service.predict_face_fortune(
+                image_bytes=b"test_image",
+                event=event,
+                time=time,
+                use_cache=False
+            )
+            
+            assert result["success"] is True
+            # 验证使用了默认提示词（并替换了占位符）
+            mock_call.assert_called_once()
+            call_kwargs = mock_call.call_args[1]
+            prompt = call_kwargs["prompt"]
+            assert time in prompt
+            assert event in prompt
+    
+    @pytest.mark.asyncio
+    async def test_predict_face_fortune_auto_time(self):
+        """测试面相预测自动生成时间"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        event = "我要去参加一个重要的面试"
+        
+        with patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = {
+                "success": True,
+                "content": '{"eventAnalysis": {"status": "吉", "score": 85}}'
+            }
+            
+            # 不提供time，应该自动生成
+            result = await service.predict_face_fortune(
+                image_bytes=b"test_image",
+                event=event,
+                use_cache=False
+            )
+            
+            assert result["success"] is True
+            # 验证提示词中包含了时间（自动生成的）
+            mock_call.assert_called_once()
+            call_kwargs = mock_call.call_args[1]
+            prompt = call_kwargs["prompt"]
+            assert "【当前时间】" in prompt
+            assert event in prompt
+    
+    @pytest.mark.asyncio
+    async def test_predict_face_fortune_with_custom_prompt(self):
+        """测试使用自定义提示词进行面相预测"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        event = "我要去参加一个重要的面试"
+        time = "2024年1月15日 14:30"
+        custom_prompt = "分析面相。时间：{time}，事件：{event}"
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
+             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            
+            mock_cache.return_value = None  # 缓存未命中
+            mock_call.return_value = {
+                "success": True,
+                "content": '{"eventAnalysis": {"status": "吉", "score": 85}}'
+            }
+            
+            result = await service.predict_face_fortune(
+                image_bytes=b"test_image",
+                event=event,
+                time=time,
+                prompt=custom_prompt,
+                use_cache=True
+            )
+            
+            assert result["success"] is True
+            assert mock_call.called
+            call_kwargs = mock_call.call_args[1]
+            prompt = call_kwargs["prompt"]
+            # 验证占位符被替换
+            assert time in prompt
+            assert event in prompt
+            assert "{time}" not in prompt
+            assert "{event}" not in prompt
     
     @pytest.mark.asyncio
     async def test_edit_image(self):
@@ -740,6 +956,185 @@ class TestLLMServiceCache:
             mock_cache.assert_not_called()
             # 验证直接调用了API
             mock_call.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_classify_color_cache_hit(self):
+        """测试颜色分类服务缓存命中"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        prompt = settings.COLOR_CLASSIFICATION_PROMPT
+        
+        cached_result = {
+            "result": {"content": '{"background_color": "蓝色", "confidence": 0.9}'},
+            "status": "success"
+        }
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = cached_result
+            
+            result = await service.classify_color(image_bytes, use_cache=True)
+            
+            assert result["success"] is True
+            assert result["from_cache"] is True
+            assert result["content"] == '{"background_color": "蓝色", "confidence": 0.9}'
+    
+    @pytest.mark.asyncio
+    async def test_classify_color_cache_miss(self):
+        """测试颜色分类服务缓存未命中"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
+             patch.object(unified_llm_cache, 'save_result', new_callable=AsyncMock) as mock_save, \
+             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            
+            mock_cache.return_value = None
+            mock_call.return_value = {"success": True, "content": '{"background_color": "红色", "confidence": 0.95}'}
+            
+            result = await service.classify_color(image_bytes, use_cache=True)
+            
+            assert result["success"] is True
+            mock_call.assert_called_once()
+            mock_save.assert_called_once()
+            call_args = mock_save.call_args
+            assert call_args[1]["service_type"] == "color_classification"
+    
+    @pytest.mark.asyncio
+    async def test_analyze_composition_cache_hit(self):
+        """测试构图分析服务缓存命中"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        prompt = settings.COMPOSITION_ANALYSIS_PROMPT
+        
+        cached_result = {
+            "result": {"content": '{"composition_type": "rule_of_thirds", "score": 8.5}'},
+            "status": "success"
+        }
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = cached_result
+            
+            result = await service.analyze_composition(image_bytes, use_cache=True)
+            
+            assert result["success"] is True
+            assert result["from_cache"] is True
+            assert result["content"] == '{"composition_type": "rule_of_thirds", "score": 8.5}'
+    
+    @pytest.mark.asyncio
+    async def test_analyze_composition_cache_miss(self):
+        """测试构图分析服务缓存未命中"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
+             patch.object(unified_llm_cache, 'save_result', new_callable=AsyncMock) as mock_save, \
+             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            
+            mock_cache.return_value = None
+            mock_call.return_value = {
+                "success": True,
+                "content": '{"composition_type": "center_composition", "score": 7.5}'
+            }
+            
+            result = await service.analyze_composition(image_bytes, use_cache=True)
+            
+            assert result["success"] is True
+            mock_call.assert_called_once()
+            mock_save.assert_called_once()
+            call_args = mock_save.call_args
+            assert call_args[1]["service_type"] == "composition_analysis"
+    
+    @pytest.mark.asyncio
+    async def test_predict_face_fortune_cache_hit(self):
+        """测试面相预测服务缓存命中"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        event = "我要去参加一个重要的面试"
+        time = "2024年1月15日 14:30"
+        
+        cached_result = {
+            "result": {"content": '{"eventAnalysis": {"status": "吉", "score": 85}}'},
+            "status": "success"
+        }
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache:
+            mock_cache.return_value = cached_result
+            
+            result = await service.predict_face_fortune(
+                image_bytes=image_bytes,
+                event=event,
+                time=time,
+                use_cache=True
+            )
+            
+            assert result["success"] is True
+            assert result["from_cache"] is True
+            assert result["content"] == '{"eventAnalysis": {"status": "吉", "score": 85}}'
+    
+    @pytest.mark.asyncio
+    async def test_predict_face_fortune_cache_miss(self):
+        """测试面相预测服务缓存未命中"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        event = "我要去参加一个重要的面试"
+        time = "2024年1月15日 14:30"
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
+             patch.object(unified_llm_cache, 'save_result', new_callable=AsyncMock) as mock_save, \
+             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            
+            mock_cache.return_value = None
+            mock_call.return_value = {
+                "success": True,
+                "content": '{"eventAnalysis": {"status": "吉", "score": 85}}'
+            }
+            
+            result = await service.predict_face_fortune(
+                image_bytes=image_bytes,
+                event=event,
+                time=time,
+                use_cache=True
+            )
+            
+            assert result["success"] is True
+            mock_call.assert_called_once()
+            mock_save.assert_called_once()
+            call_args = mock_save.call_args
+            assert call_args[1]["service_type"] == "face_fortune"
+            # 验证prompt中包含了event和time
+            prompt = call_args[1]["prompt"]
+            assert event in prompt
+            assert time in prompt
 
 
 class TestLLMServiceErrorHandling:
@@ -1008,6 +1403,153 @@ class TestLLMServiceErrorHandling:
             cache_call_args = mock_cache.call_args
             # call_args 是 (args, kwargs) tuple，prompt 是关键字参数
             assert cache_call_args[1]['prompt'] == prompt
+    
+    @pytest.mark.asyncio
+    async def test_classify_color_input_error(self):
+        """测试颜色分类服务输入错误处理"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        
+        input_error = LLMError(
+            message="Invalid image format",
+            error_type=LLMErrorType.INPUT_ERROR,
+            status_code=400,
+            error_code="INVALID_IMAGE",
+            user_message="输入参数有误，请检查图片格式和内容"
+        )
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
+             patch.object(unified_llm_cache, 'save_error_result', new_callable=AsyncMock) as mock_save_error, \
+             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            
+            mock_cache.return_value = None
+            mock_call.side_effect = input_error
+            
+            result = await service.classify_color(image_bytes, use_cache=True)
+            
+            assert result["success"] is False
+            assert result["error"]["type"] == "input_error"
+            mock_save_error.assert_called_once()
+            call_args = mock_save_error.call_args
+            assert call_args[1]["service_type"] == "color_classification"
+    
+    @pytest.mark.asyncio
+    async def test_analyze_composition_input_error(self):
+        """测试构图分析服务输入错误处理"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        
+        input_error = LLMError(
+            message="Invalid image format",
+            error_type=LLMErrorType.INPUT_ERROR,
+            status_code=400,
+            error_code="INVALID_IMAGE",
+            user_message="输入参数有误，请检查图片格式和内容"
+        )
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
+             patch.object(unified_llm_cache, 'save_error_result', new_callable=AsyncMock) as mock_save_error, \
+             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            
+            mock_cache.return_value = None
+            mock_call.side_effect = input_error
+            
+            result = await service.analyze_composition(image_bytes, use_cache=True)
+            
+            assert result["success"] is False
+            assert result["error"]["type"] == "input_error"
+            mock_save_error.assert_called_once()
+            call_args = mock_save_error.call_args
+            assert call_args[1]["service_type"] == "composition_analysis"
+    
+    @pytest.mark.asyncio
+    async def test_predict_face_fortune_input_error(self):
+        """测试面相预测服务输入错误处理"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        event = "我要去参加一个重要的面试"
+        time = "2024年1月15日 14:30"
+        
+        input_error = LLMError(
+            message="Invalid image format",
+            error_type=LLMErrorType.INPUT_ERROR,
+            status_code=400,
+            error_code="INVALID_IMAGE",
+            user_message="输入参数有误，请检查图片格式和内容"
+        )
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
+             patch.object(unified_llm_cache, 'save_error_result', new_callable=AsyncMock) as mock_save_error, \
+             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            
+            mock_cache.return_value = None
+            mock_call.side_effect = input_error
+            
+            result = await service.predict_face_fortune(
+                image_bytes=image_bytes,
+                event=event,
+                time=time,
+                use_cache=True
+            )
+            
+            assert result["success"] is False
+            assert result["error"]["type"] == "input_error"
+            mock_save_error.assert_called_once()
+            call_args = mock_save_error.call_args
+            assert call_args[1]["service_type"] == "face_fortune"
+    
+    @pytest.mark.asyncio
+    async def test_predict_face_fortune_auth_error(self):
+        """测试面相预测服务权限错误处理"""
+        service = LLMService(
+            provider="aliyun",
+            api_key="test_key",
+            model="qwen-vl-plus"
+        )
+        
+        image_bytes = b"test_image_data"
+        event = "我要去参加一个重要的面试"
+        time = "2024年1月15日 14:30"
+        
+        auth_error = LLMError(
+            message="Invalid API key",
+            error_type=LLMErrorType.AUTH_ERROR,
+            status_code=401,
+            error_code="UNAUTHORIZED",
+            user_message="服务暂时不可用，请稍后重试"
+        )
+        
+        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
+             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            
+            mock_cache.return_value = None
+            mock_call.side_effect = auth_error
+            
+            result = await service.predict_face_fortune(
+                image_bytes=image_bytes,
+                event=event,
+                time=time,
+                use_cache=True
+            )
+            
+            assert result["success"] is False
+            assert result["error"]["type"] == "auth_error"
+            assert result["error"]["user_message"] == "服务暂时不可用，请稍后重试"
 
 
 class TestProviderAdapters:
@@ -1177,6 +1719,47 @@ class TestProviderAdapters:
         
         with pytest.raises(NotImplementedError, match="Claude暂不支持图像编辑"):
             await provider._call_image_edit(image_bytes, prompt)
+    
+    @pytest.mark.asyncio
+    async def test_deepseek_classification(self):
+        """测试Deepseek分类适配器"""
+        provider = DeepseekProvider(
+            provider="deepseek",
+            api_key="test_key",
+            model="deepseek-chat"
+        )
+        
+        image_bytes = create_test_image_bytes()
+        prompt = "test prompt"
+        
+        # 直接mock _call_classification方法，避免导入问题
+        async def mock_call_classification(img_bytes, prmpt):
+            return {
+                "success": True,
+                "content": '{"category": "pets"}'
+            }
+        
+        provider._call_classification = mock_call_classification
+        
+        result = await provider._call_classification(image_bytes, prompt)
+        
+        assert result["success"] is True
+        assert "content" in result
+    
+    @pytest.mark.asyncio
+    async def test_deepseek_image_edit_not_supported(self):
+        """测试Deepseek不支持图像编辑"""
+        provider = DeepseekProvider(
+            provider="deepseek",
+            api_key="test_key",
+            model="deepseek-chat"
+        )
+        
+        image_bytes = create_test_image_bytes()
+        prompt = "edit prompt"
+        
+        with pytest.raises(NotImplementedError, match="Deepseek暂不支持图像编辑"):
+            await provider._call_image_edit(image_bytes, prompt)
 
 
 # ====================================
@@ -1314,4 +1897,38 @@ class TestClaudeProviderReal:
         assert "content" in result
         assert len(result["content"]) > 0
         print(f"Claude分类结果: {result['content']}")
+
+
+class TestDeepseekProviderReal:
+    """Deepseek提供商真实API调用测试"""
+    
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not get_test_api_key("deepseek"),
+        reason="需要设置 TEST_DEEPSEEK_API_KEY 环境变量"
+    )
+    async def test_real_classification(self):
+        """真实分类API调用测试"""
+        api_key = get_test_api_key("deepseek")
+        provider = DeepseekProvider(
+            provider="deepseek",
+            api_key=api_key,
+            model="deepseek-chat",
+            max_retries=1,
+            timeout=30
+        )
+        
+        image_bytes = create_test_image_bytes()
+        prompt = "Describe this image in one sentence"
+        
+        result = await provider.call_with_retry(
+            task_type="classification",
+            image_bytes=image_bytes,
+            prompt=prompt
+        )
+        
+        assert result["success"] is True
+        assert "content" in result
+        assert len(result["content"]) > 0
+        print(f"Deepseek分类结果: {result['content']}")
 

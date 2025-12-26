@@ -5,7 +5,7 @@
 
 from app.services.llm.base_service import BaseLLMService
 from app.services.llm.llm_service import LLMService, llm_service
-from app.services.llm.providers import LLMProvider, AliyunProvider, OpenAIProvider, ClaudeProvider
+from app.services.llm.providers import LLMProvider, AliyunProvider, OpenAIProvider, ClaudeProvider, DeepseekProvider
 
 __all__ = [
     "BaseLLMService",
@@ -15,5 +15,6 @@ __all__ = [
     "AliyunProvider",
     "OpenAIProvider",
     "ClaudeProvider",
+    "DeepseekProvider",
 ]
 
