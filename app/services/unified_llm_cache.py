@@ -6,10 +6,13 @@
 
 import hashlib
 import json
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, TYPE_CHECKING
 from datetime import datetime
 from app.database import db
 from loguru import logger
+
+if TYPE_CHECKING:
+    from app.services.llm.base_service import LLMError
 
 
 class UnifiedLLMCacheService:
@@ -269,6 +272,109 @@ class UnifiedLLMCacheService:
                 
         except Exception as e:
             logger.error(f"保存缓存失败: {e}")
+            return False
+    
+    async def save_error_result(
+        self,
+        prompt: str,
+        image_hash: str,
+        provider: str,
+        model_id: str,
+        error: "LLMError",  # 使用字符串引用避免循环导入
+        model_version: Optional[str] = None,
+        service_type: Optional[str] = None,
+        edit_type: Optional[str] = None,
+        **extra_fields
+    ) -> bool:
+        """
+        保存错误结果到缓存（仅用于输入错误等需要缓存的错误）
+        
+        Args:
+            prompt: 提示词
+            image_hash: 图像哈希
+            provider: 提供商
+            model_id: 模型ID
+            error: LLMError对象
+            model_version: 模型版本
+            service_type: 业务类型（可选，用于统计）
+            edit_type: 编辑类型（可选，仅编辑服务）
+            **extra_fields: 扩展字段
+        
+        Returns:
+            是否保存成功
+        """
+        try:
+            prompt_hash = self._generate_prompt_hash(prompt)
+            model_key = self._generate_model_key(provider, model_id, model_version)
+            
+            # 构建错误结果数据
+            model_result_data = {
+                "result": None,  # 错误结果
+                "error": {
+                    "type": error.error_type.value,
+                    "message": error.message,
+                    "user_message": error.user_message,
+                    "status_code": error.status_code,
+                    "error_code": error.error_code
+                },
+                "status": "error",
+                "created_at": datetime.now().isoformat(),
+                **extra_fields
+            }
+            
+            # 可选：添加业务元数据
+            if service_type:
+                model_result_data["service_type"] = service_type
+            if edit_type:
+                model_result_data["edit_type"] = edit_type
+            
+            model_result_json = json.dumps(model_result_data, ensure_ascii=False)
+            
+            async with db.get_cursor() as cursor:
+                # 先检查记录是否存在
+                await cursor.execute("""
+                    SELECT model_results FROM llm_inference_cache_v2
+                    WHERE prompt_hash = %s AND image_hash = %s
+                """, (prompt_hash, image_hash))
+                existing = await cursor.fetchone()
+                
+                if existing:
+                    # 记录已存在，更新JSON字段
+                    existing_results = json.loads(existing['model_results'])
+                    existing_results[model_key] = model_result_data
+                    updated_results = json.dumps(existing_results, ensure_ascii=False)
+                    total_models = len(existing_results)
+                    
+                    await cursor.execute("""
+                        UPDATE llm_inference_cache_v2
+                        SET 
+                            model_results = %s,
+                            total_models = %s,
+                            updated_at = NOW()
+                        WHERE prompt_hash = %s AND image_hash = %s
+                    """, (updated_results, total_models, prompt_hash, image_hash))
+                else:
+                    # 记录不存在，插入新记录
+                    initial_model_results = {model_key: model_result_data}
+                    await cursor.execute("""
+                        INSERT INTO llm_inference_cache_v2 
+                        (prompt_hash, image_hash, model_results, total_models, hit_count)
+                        VALUES (%s, %s, %s, 1, 1)
+                    """, (
+                        prompt_hash,
+                        image_hash,
+                        json.dumps(initial_model_results, ensure_ascii=False)
+                    ))
+                
+                logger.info(
+                    f"错误结果已缓存: prompt_hash={prompt_hash[:16]}..., "
+                    f"image_hash={image_hash[:16]}..., model={model_key}, "
+                    f"error_type={error.error_type.value}"
+                )
+                return True
+                
+        except Exception as e:
+            logger.error(f"保存错误缓存失败: {e}")
             return False
     
     async def get_available_models(

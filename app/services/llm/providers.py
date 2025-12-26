@@ -8,7 +8,7 @@ import asyncio
 from typing import Dict, Any, Optional
 from abc import abstractmethod
 from loguru import logger
-from app.services.llm.base_service import BaseLLMService
+from app.services.llm.base_service import BaseLLMService, LLMError, LLMErrorType
 from app.config import settings
 
 
@@ -82,7 +82,8 @@ class AliyunProvider(LLMProvider):
             )
             
             # 解析响应
-            if hasattr(response, 'status_code') and response.status_code == 200:
+            status_code = getattr(response, 'status_code', None)
+            if status_code == 200:
                 if hasattr(response, 'output') and hasattr(response.output, 'choices'):
                     content = response.output.choices[0].message.content[0]['text']
                     return {
@@ -91,18 +92,52 @@ class AliyunProvider(LLMProvider):
                         "raw_response": response
                     }
                 else:
-                    raise Exception("响应格式错误: 缺少 output 或 choices")
+                    raise LLMError(
+                        message="响应格式错误: 缺少 output 或 choices",
+                        error_type=LLMErrorType.FORMAT_ERROR,
+                        status_code=status_code
+                    )
             else:
-                error_msg = f"API返回状态码: {getattr(response, 'status_code', 'unknown')}"
+                error_msg = f"API返回状态码: {status_code or 'unknown'}"
+                error_code = None
                 if hasattr(response, 'message'):
                     error_msg += f", 消息: {response.message}"
-                raise Exception(error_msg)
+                if hasattr(response, 'code'):
+                    error_code = response.code
+                
+                # 根据状态码判断错误类型
+                if status_code == 400:
+                    error_type = LLMErrorType.INPUT_ERROR
+                elif status_code in [401, 403]:
+                    error_type = LLMErrorType.AUTH_ERROR
+                elif status_code == 429:
+                    error_type = LLMErrorType.RATE_LIMIT_ERROR
+                elif status_code and status_code >= 500:
+                    error_type = LLMErrorType.SERVER_ERROR
+                else:
+                    error_type = LLMErrorType.BUSINESS_ERROR
+                
+                raise LLMError(
+                    message=error_msg,
+                    error_type=error_type,
+                    status_code=status_code,
+                    error_code=error_code
+                )
                 
         except ImportError:
-            raise Exception("dashscope SDK未安装，请运行: pip install dashscope")
+            raise LLMError(
+                message="dashscope SDK未安装，请运行: pip install dashscope",
+                error_type=LLMErrorType.BUSINESS_ERROR
+            )
+        except LLMError:
+            raise  # 重新抛出LLMError
         except Exception as e:
             logger.error(f"阿里云分类API调用失败: {e}")
-            raise
+            # 转换为LLMError
+            raise LLMError(
+                message=str(e),
+                error_type=LLMErrorType.NETWORK_ERROR
+            ) from e
     
     async def _call_image_edit(
         self,
@@ -158,14 +193,44 @@ class AliyunProvider(LLMProvider):
                             "raw_response": result
                         }
                     else:
-                        raise Exception(f"API返回格式错误: {result}")
+                        raise LLMError(
+                            message=f"API返回格式错误: {result}",
+                            error_type=LLMErrorType.FORMAT_ERROR,
+                            status_code=200
+                        )
                 else:
-                    error_info = response.json() if response.text else "未知错误"
-                    raise Exception(f"API调用失败: {error_info}")
+                    error_info = response.json() if response.text else {"message": "未知错误"}
+                    error_code = error_info.get('code') if isinstance(error_info, dict) else None
+                    error_message = error_info.get('message', str(error_info)) if isinstance(error_info, dict) else str(error_info)
                     
+                    # 根据状态码判断错误类型
+                    if response.status_code == 400:
+                        error_type = LLMErrorType.INPUT_ERROR
+                    elif response.status_code in [401, 403]:
+                        error_type = LLMErrorType.AUTH_ERROR
+                    elif response.status_code == 429:
+                        error_type = LLMErrorType.RATE_LIMIT_ERROR
+                    elif response.status_code >= 500:
+                        error_type = LLMErrorType.SERVER_ERROR
+                    else:
+                        error_type = LLMErrorType.BUSINESS_ERROR
+                    
+                    raise LLMError(
+                        message=f"API调用失败: {error_message}",
+                        error_type=error_type,
+                        status_code=response.status_code,
+                        error_code=error_code
+                    )
+                    
+        except LLMError:
+            raise  # 重新抛出LLMError
         except Exception as e:
             logger.error(f"阿里云图像编辑API调用失败: {e}")
-            raise
+            # 转换为LLMError
+            raise LLMError(
+                message=str(e),
+                error_type=LLMErrorType.NETWORK_ERROR
+            ) from e
 
 
 class OpenAIProvider(LLMProvider):
@@ -206,9 +271,38 @@ class OpenAIProvider(LLMProvider):
                 "raw_response": response
             }
             
+        except ImportError:
+            raise LLMError(
+                message="openai SDK未安装，请运行: pip install openai",
+                error_type=LLMErrorType.BUSINESS_ERROR
+            )
+        except LLMError:
+            raise  # 重新抛出LLMError
         except Exception as e:
             logger.error(f"OpenAI API调用失败: {e}")
-            raise
+            # OpenAI SDK 会抛出特定异常，需要解析
+            error_str = str(e).lower()
+            status_code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
+            
+            # 判断错误类型
+            if status_code == 400 or 'invalid' in error_str or 'bad request' in error_str:
+                error_type = LLMErrorType.INPUT_ERROR
+            elif status_code in [401, 403] or 'authentication' in error_str or 'unauthorized' in error_str:
+                error_type = LLMErrorType.AUTH_ERROR
+            elif status_code == 429 or 'rate limit' in error_str:
+                error_type = LLMErrorType.RATE_LIMIT_ERROR
+            elif status_code and status_code >= 500 or 'server' in error_str:
+                error_type = LLMErrorType.SERVER_ERROR
+            elif 'timeout' in error_str or 'connection' in error_str:
+                error_type = LLMErrorType.NETWORK_ERROR
+            else:
+                error_type = LLMErrorType.NETWORK_ERROR
+            
+            raise LLMError(
+                message=str(e),
+                error_type=error_type,
+                status_code=status_code
+            ) from e
     
     async def _call_image_edit(
         self,
@@ -264,9 +358,38 @@ class ClaudeProvider(LLMProvider):
                 "raw_response": message
             }
             
+        except ImportError:
+            raise LLMError(
+                message="anthropic SDK未安装，请运行: pip install anthropic",
+                error_type=LLMErrorType.BUSINESS_ERROR
+            )
+        except LLMError:
+            raise  # 重新抛出LLMError
         except Exception as e:
             logger.error(f"Claude API调用失败: {e}")
-            raise
+            # Claude SDK 会抛出特定异常，需要解析
+            error_str = str(e).lower()
+            status_code = getattr(e, 'status_code', None) or getattr(e, 'code', None)
+            
+            # 判断错误类型
+            if status_code == 400 or 'invalid' in error_str or 'bad request' in error_str:
+                error_type = LLMErrorType.INPUT_ERROR
+            elif status_code in [401, 403] or 'authentication' in error_str or 'unauthorized' in error_str:
+                error_type = LLMErrorType.AUTH_ERROR
+            elif status_code == 429 or 'rate limit' in error_str:
+                error_type = LLMErrorType.RATE_LIMIT_ERROR
+            elif status_code and status_code >= 500 or 'server' in error_str:
+                error_type = LLMErrorType.SERVER_ERROR
+            elif 'timeout' in error_str or 'connection' in error_str:
+                error_type = LLMErrorType.NETWORK_ERROR
+            else:
+                error_type = LLMErrorType.NETWORK_ERROR
+            
+            raise LLMError(
+                message=str(e),
+                error_type=error_type,
+                status_code=status_code
+            ) from e
     
     async def _call_image_edit(
         self,
