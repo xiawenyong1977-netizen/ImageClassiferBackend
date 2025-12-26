@@ -1,0 +1,57 @@
+# CI 环境专用依赖文件（使用 CPU 版本的 PyTorch 以节省磁盘空间）
+# FastAPI框架和ASGI服务器
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+gunicorn==21.2.0
+
+# 数据库
+pymysql==1.1.0
+aiomysql==0.2.0
+cryptography==42.0.0
+
+# 数据验证和模型
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# 图片处理
+Pillow==10.2.0
+
+# 二维码检测
+pyzbar==0.1.9
+
+# ONNX Runtime (本地模型推理) - CPU 版本
+onnxruntime==1.16.3
+numpy==1.24.3
+
+# PyTorch CPU 版本（CI 环境不需要 GPU，使用 CPU 版本可节省大量空间）
+# 注意：在 CI 中需要先通过 pip install 命令安装 CPU 版本，然后再安装 ultralytics
+# 这里先注释，在 CI workflow 中单独安装
+# torch==2.1.0+cpu
+# torchvision==0.16.0+cpu
+
+# YOLO推理库（会自动检测已安装的 torch）
+# 注意：如果已安装 CPU 版本的 torch，ultralytics 会使用它而不是安装 CUDA 版本
+ultralytics==8.0.200
+
+# 大模型API客户端
+dashscope>=1.14.0      # 阿里云灵积DashScope SDK
+openai==1.10.0
+
+# 工具库
+python-multipart==0.0.6  # 文件上传
+python-dotenv==1.0.0      # 环境变量
+loguru==0.7.2             # 日志
+
+# 认证和安全
+python-jose[cryptography]==3.3.0  # JWT token
+passlib[bcrypt]==1.7.4            # 密码哈希
+
+# HTTP客户端
+httpx==0.26.0
+aiofiles==23.2.1
+
+# 测试工具
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+

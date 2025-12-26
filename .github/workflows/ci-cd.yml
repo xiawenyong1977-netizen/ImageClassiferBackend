@@ -50,6 +50,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'  # 启用 pip 缓存（但会在安装时清理）
 
       - name: Cache pip packages
         uses: actions/cache@v4
@@ -58,12 +59,40 @@ jobs:
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
+      # 注意：由于磁盘空间限制，安装时会使用 --no-cache-dir，但缓存仍可用于恢复已下载的包
+
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 512
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: Free disk space
+        run: |
+          # 清理 pip 缓存（在安装前）
+          pip cache purge || true
+          # 显示可用磁盘空间
+          df -h
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # CI 环境先安装 CPU 版本的 PyTorch（节省磁盘空间，避免安装 CUDA 版本）
+          # 这样可以避免 ultralytics 自动安装完整的 CUDA 版本
+          pip install --no-cache-dir torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cpu
+          # 然后安装其他依赖（ultralytics 会检测到已安装的 torch，不会重新安装）
+          if [ -f requirements-ci.txt ]; then
+            pip install --no-cache-dir -r requirements-ci.txt
+          else
+            pip install --no-cache-dir -r requirements.txt
+          fi
           # pytest相关依赖已在requirements.txt中
+          # 安装后再次清理
+          pip cache purge || true
 
       - name: Run linting (optional)
         run: |
