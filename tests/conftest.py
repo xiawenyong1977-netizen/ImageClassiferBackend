@@ -36,6 +36,58 @@ async def setup_test_db():
             # 初始化数据库连接池（session级别，所有测试共享）
             if not db.pool:
                 await db.connect()
+            
+            # 执行数据库初始化脚本
+            sql_file = Path(__file__).parent / "setup_test_db.sql"
+            if sql_file.exists():
+                try:
+                    # 读取SQL文件
+                    sql_content = sql_file.read_text(encoding='utf-8')
+                    
+                    # 移除注释和空行，按分号分割SQL语句
+                    statements = []
+                    current_statement = []
+                    for line in sql_content.split('\n'):
+                        # 移除行注释
+                        line = line.split('--')[0].strip()
+                        if not line or line.startswith('--'):
+                            continue
+                        current_statement.append(line)
+                        # 如果行以分号结尾，说明语句结束
+                        if line.rstrip().endswith(';'):
+                            statement = ' '.join(current_statement).strip()
+                            if statement:
+                                statements.append(statement)
+                            current_statement = []
+                    
+                    # 执行所有SQL语句
+                    async with db.get_connection() as conn:
+                        async with conn.cursor() as cursor:
+                            for statement in statements:
+                                if statement:
+                                    # 跳过USE语句（连接已指定数据库）
+                                    if statement.strip().upper().startswith('USE '):
+                                        continue
+                                    # 跳过SELECT语句（只是显示状态）
+                                    if statement.strip().upper().startswith('SELECT ') and 'AS \'Status\'' in statement:
+                                        continue
+                                    try:
+                                        await cursor.execute(statement)
+                                    except Exception as e:
+                                        # 忽略表已存在的错误和重复键错误
+                                        error_str = str(e).lower()
+                                        if any(keyword in error_str for keyword in ["already exists", "duplicate", "table"]):
+                                            # 表已存在或重复键，这是正常的，忽略
+                                            pass
+                                        else:
+                                            # 对于其他错误，记录警告但不中断测试
+                                            import warnings
+                                            warnings.warn(f"执行SQL语句时出现警告: {e}\n语句: {statement[:100]}")
+                            await conn.commit()
+                except Exception as e:
+                    # 如果初始化脚本执行失败，记录警告但不中断测试
+                    import warnings
+                    warnings.warn(f"数据库初始化脚本执行失败（可能表已存在）: {e}")
         except Exception as e:
             pytest.skip(f"测试数据库不可用: {e}")
     
