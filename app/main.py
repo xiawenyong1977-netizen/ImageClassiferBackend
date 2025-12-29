@@ -58,27 +58,92 @@ if settings.LOG_FILE:
         logger.warning(f"无法创建日志文件 {settings.LOG_FILE}: {e}，将仅使用控制台日志")
 
 
+async def startup_health_check(app: FastAPI, pid: int):
+    """启动后自检：检查关键组件状态"""
+    checks = {
+        "数据库": False,
+        "模型API配置": False,
+        "路由注册": False
+    }
+    
+    # 1. 检查数据库连接
+    try:
+        async with db.get_cursor() as cursor:
+            await cursor.execute("SELECT 1")
+            checks["数据库"] = True
+    except Exception as e:
+        logger.error(f"Worker [{pid}] 自检失败 - 数据库连接异常: {e}")
+        checks["数据库"] = False
+    
+    # 2. 检查模型API配置
+    if settings.LLM_API_KEY:
+        checks["模型API配置"] = True
+    else:
+        logger.warning(f"Worker [{pid}] 自检警告 - 模型API密钥未配置")
+        checks["模型API配置"] = False
+    
+    # 3. 检查路由注册（简单检查关键路由是否存在）
+    try:
+        routes = [route.path for route in app.routes]
+        key_routes = ["/api/v1/health", "/api/v2/health", "/"]
+        if any(route in routes for route in key_routes):
+            checks["路由注册"] = True
+        else:
+            checks["路由注册"] = False
+    except Exception as e:
+        logger.warning(f"Worker [{pid}] 自检警告 - 路由检查异常: {e}")
+        checks["路由注册"] = False
+    
+    # 输出自检结果（合并为一行，避免多worker时日志交错）
+    all_ok = all(checks.values())
+    status_icon = "✅" if all_ok else "⚠️"
+    
+    # 构建检查项状态字符串
+    check_items = []
+    for component, status in checks.items():
+        icon = "✓" if status else "✗"
+        check_items.append(f"{icon}{component}")
+    
+    check_summary = " | ".join(check_items)
+    logger.info(f"Worker [{pid}] 启动自检 {status_icon} | {check_summary}")
+    
+    if not all_ok:
+        failed_components = [comp for comp, status in checks.items() if not status]
+        logger.warning(f"Worker [{pid}] 启动自检发现异常组件: {', '.join(failed_components)}")
+    
+    return all_ok
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    # 启动时
-    logger.info("========================================")
-    logger.info("图片分类后端服务启动中...")
-    logger.info(f"环境: {settings.APP_ENV}")
-    logger.info(f"调试模式: {settings.APP_DEBUG}")
-    logger.info(f"大模型提供商: {settings.LLM_PROVIDER}")
-    logger.info("========================================")
+    import os
+    pid = os.getpid()
+    
+    # 启动时（简化日志，添加进程ID）
+    logger.info(f"Worker [{pid}] 启动中 | 环境: {settings.APP_ENV} | 调试: {settings.APP_DEBUG} | LLM: {settings.LLM_PROVIDER}")
     
     # 连接数据库
-    await db.connect()
-    logger.info("数据库连接成功")
+    try:
+        await db.connect()
+        logger.debug(f"Worker [{pid}] 数据库连接成功")
+    except Exception as e:
+        logger.error(f"Worker [{pid}] 数据库连接失败: {e}")
+        raise
+    
+    # 启动后自检
+    try:
+        await startup_health_check(app, pid)
+    except Exception as e:
+        logger.error(f"Worker [{pid}] 启动自检异常: {e}")
+        # 自检失败不阻止启动，只记录错误
     
     yield
     
     # 关闭时
-    logger.info("图片分类后端服务关闭中...")
+    logger.info(f"Worker [{pid}] 关闭中...")
     await db.disconnect()
-    logger.info("数据库连接已关闭")
+    logger.debug(f"Worker [{pid}] 数据库连接已关闭")
 
 
 # 创建FastAPI应用

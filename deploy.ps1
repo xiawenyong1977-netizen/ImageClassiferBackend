@@ -116,18 +116,35 @@ if ($Incremental) {
         
         if ($changedFiles.Count -gt 0) {
             Write-Host "  发现 $($changedFiles.Count) 个变更文件" -ForegroundColor Cyan
+            # 统一路径分隔符为 Unix 风格（/）
+            $changedFiles = $changedFiles | ForEach-Object { $_.Replace("\", "/") }
+            
             # 提取需要同步的目录（去重）
             foreach ($file in $changedFiles) {
-                $filePath = Join-Path $LOCAL_DIR $file
+                # 统一路径分隔符
+                $normalizedFile = $file.Replace("\", "/")
+                $filePath = Join-Path $LOCAL_DIR $normalizedFile
+                
                 if (Test-Path $filePath) {
-                    $parentDir = Split-Path $file -Parent
-                    if ($parentDir -and $parentDir -ne ".") {
-                        $rootDir = ($parentDir -split "/")[0]
+                    # 提取根目录（第一个路径段）
+                    $pathParts = $normalizedFile -split "/"
+                    if ($pathParts.Count -gt 1) {
+                        $rootDir = $pathParts[0]
                         if ($rootDir -and $rootDir -notin $changedDirs) {
                             $changedDirs += $rootDir
+                            Write-Host "    检测到变更目录: $rootDir (来自文件: $normalizedFile)" -ForegroundColor Gray
                         }
+                    } elseif ($pathParts.Count -eq 1) {
+                        # 根目录下的文件，不需要同步目录
+                        Write-Host "    检测到根目录文件: $normalizedFile" -ForegroundColor Gray
                     }
+                } else {
+                    Write-Host "    警告: 变更文件不存在: $normalizedFile" -ForegroundColor Yellow
                 }
+            }
+            
+            if ($changedDirs.Count -gt 0) {
+                Write-Host "  需要同步的目录: $($changedDirs -join ', ')" -ForegroundColor Cyan
             }
         } else {
             Write-Host "  未发现变更文件，将跳过文件同步" -ForegroundColor Yellow
@@ -163,45 +180,51 @@ function Sync-Directory {
         # 增量模式：只同步变更的文件
         Write-Host "  增量同步 $Description (只同步变更的文件)..." -ForegroundColor Cyan
         $dirName = Split-Path $LocalPath -Leaf
+        
+        # 统一路径分隔符并匹配文件
         $filesInDir = $changedFiles | Where-Object { 
-            $_ -like "$dirName/*" -or $_ -like "$dirName\*" -or $_ -eq "$dirName"
+            $normalizedFile = $_.Replace("\", "/")
+            $normalizedFile -like "$dirName/*" -or $normalizedFile -eq "$dirName"
         }
         
         if ($filesInDir.Count -eq 0) {
             Write-Host "    跳过：目录下没有变更的文件" -ForegroundColor Gray
+            Write-Host "    调试: dirName=$dirName, changedFiles=$($changedFiles -join ', ')" -ForegroundColor Gray
             return
         }
         
         Write-Host "    发现 $($filesInDir.Count) 个变更文件需要同步" -ForegroundColor Cyan
+        foreach ($f in $filesInDir) {
+            Write-Host "      - $f" -ForegroundColor Gray
+        }
         
         $syncSuccessCount = 0
         $syncFailCount = 0
         
         foreach ($file in $filesInDir) {
-            # 统一路径分隔符
-            $file = $file.Replace("\", "/")
-            $localFilePath = Join-Path $LOCAL_DIR $file
+            # 统一路径分隔符为 Unix 风格
+            $normalizedFile = $file.Replace("\", "/")
+            $localFilePath = Join-Path $LOCAL_DIR $normalizedFile
+            # PowerShell 的 Join-Path 使用反斜杠，需要转换
             $localFilePath = $localFilePath.Replace("\", "/")
             
             if (-not (Test-Path $localFilePath)) {
-                Write-Host "    跳过 $file (文件不存在)" -ForegroundColor Yellow
+                Write-Host "    跳过 $normalizedFile (文件不存在)" -ForegroundColor Yellow
                 continue
             }
             
             # 计算远程路径：从文件路径中去掉目录前缀
-            # 例如：如果 $file = "app/api/image_edit_v2.py"，$dirName = "app"
+            # 例如：如果 $normalizedFile = "app/api/image_edit_v2.py"，$dirName = "app"
             # 那么相对路径应该是 "api/image_edit_v2.py"
-            $relativePath = $file
-            if ($file.StartsWith("$dirName/")) {
-                $relativePath = $file.Substring($dirName.Length + 1)
-            } elseif ($file.StartsWith("$dirName\")) {
-                $relativePath = $file.Substring($dirName.Length + 1).Replace("\", "/")
+            $relativePath = $normalizedFile
+            if ($normalizedFile.StartsWith("$dirName/")) {
+                $relativePath = $normalizedFile.Substring($dirName.Length + 1)
             }
             
             # 拼接远程路径：$RemotePath 已经包含了目录名，只需要加上相对路径
             $remoteFilePath = "${RemotePath}/$relativePath"
             
-            Write-Host "    同步文件: $file" -ForegroundColor Gray
+            Write-Host "    同步文件: $normalizedFile" -ForegroundColor Gray
             Write-Host "      本地: $localFilePath" -ForegroundColor Gray
             Write-Host "      远程: ${SERVER}:${remoteFilePath}" -ForegroundColor Gray
             
@@ -215,8 +238,8 @@ function Sync-Directory {
             
             if ($scpExitCode -eq 0) {
                 $syncSuccessCount++
-                if ($file -notin $script:deployedFiles) {
-                    $script:deployedFiles += $file
+                if ($normalizedFile -notin $script:deployedFiles) {
+                    $script:deployedFiles += $normalizedFile
                 }
             } else {
                 $syncFailCount++
