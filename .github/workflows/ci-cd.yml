@@ -140,6 +140,13 @@ jobs:
             ${{ runner.os }}-pip-
       # 注意：由于磁盘空间限制，安装时会使用 --no-cache-dir，但缓存仍可用于恢复已下载的包
 
+      - name: Install system dependencies
+        run: |
+          echo "安装系统依赖..."
+          sudo apt-get update
+          sudo apt-get install -y libzbar0
+          echo "✓ 系统依赖安装完成"
+
       - name: Free disk space
         run: |
           # 清理 pip 缓存（在安装前）
