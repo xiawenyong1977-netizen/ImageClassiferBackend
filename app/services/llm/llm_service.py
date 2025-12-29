@@ -849,22 +849,30 @@ class LLMService:
               - error_code: 错误代码
             - from_cache: 是否来自缓存
         """
+        logger.info(f"[edit_image] 方法开始执行: image_bytes_size={len(image_bytes)}, prompt={prompt[:50] if prompt else None}...")
+        
         # 计算image_hash
+        logger.info(f"[edit_image] 开始计算image_hash...")
         image_hash = HashUtils.calculate_sha256(image_bytes)
+        logger.info(f"[edit_image] image_hash计算完成: {image_hash[:16]}...")
         
         # 对于编辑服务，prompt需要包含edit_type
         full_prompt = f"{edit_type}:{prompt}" if edit_type else prompt
+        logger.info(f"[edit_image] full_prompt准备完成: {full_prompt[:50]}...")
         
         # 确定使用的模型
         actual_model = model or self.model
+        logger.info(f"[edit_image] 使用模型: {actual_model}")
         
         # 1. 如果启用缓存，先查缓存
         if use_cache:
+            logger.info(f"[edit_image] 开始查询缓存: prompt_hash={full_prompt[:20]}..., image_hash={image_hash[:16]}...")
             cached = await unified_llm_cache.get_cached_result(
                 prompt=full_prompt,
                 image_hash=image_hash,
                 model_key=f"{self.provider}:{actual_model}"
             )
+            logger.info(f"[edit_image] 缓存查询完成: cached={'命中' if cached else '未命中'}")
             if cached:
                 logger.info(f"缓存命中: image_hash={image_hash[:16]}...")
                 # 检查是否是错误结果
@@ -909,6 +917,7 @@ class LLMService:
                 logger.warning(f"提供商 {self.provider} 不支持动态指定模型，使用默认模型")
         
         # 3. 缓存未命中，调用API
+        logger.info(f"[edit_image] 缓存未命中，开始调用LLM API: provider={self.provider}, model={actual_model}")
         try:
             result = await adapter.call_with_retry(
                 task_type="image_edit",
@@ -917,6 +926,7 @@ class LLMService:
                 edit_type=edit_type,
                 **kwargs
             )
+            logger.info(f"[edit_image] LLM API调用完成: success={result.get('success') if isinstance(result, dict) else 'unknown'}")
             
             # 4. 如果成功，保存到缓存
             if use_cache and result.get('success'):

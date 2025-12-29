@@ -34,6 +34,17 @@ ssh $Server "echo '检查日志文件...'; if [ -f /var/log/image-classifier/app
 
 Write-Host ""
 Write-Host "[5/5] 运行自动化测试..." -ForegroundColor Cyan
+Write-Host "  先转换 shell 脚本的行结束符..." -ForegroundColor Yellow
+# 转换行结束符：优先使用 dos2unix，否则使用 sed（大多数系统都有）
+$convertCmd = 'cd ' + $RemoteDir + '/current/tests && ' +
+    'if command -v dos2unix >/dev/null 2>&1; then ' +
+    'dos2unix run-tests-on-server.sh 2>/dev/null && echo "  ✓ 使用 dos2unix 转换完成"; ' +
+    'elif command -v sed >/dev/null 2>&1; then ' +
+    'sed -i "s/\r$//" run-tests-on-server.sh 2>/dev/null && echo "  ✓ 使用 sed 转换完成"; ' +
+    'else ' +
+    'tr -d "\r" < run-tests-on-server.sh > run-tests-on-server.sh.tmp && mv run-tests-on-server.sh.tmp run-tests-on-server.sh && echo "  ✓ 使用 tr 转换完成"; ' +
+    'fi'
+ssh $Server $convertCmd
 Write-Host "执行测试脚本: cd $RemoteDir/current/tests && ./run-tests-on-server.sh" -ForegroundColor Yellow
 ssh $Server "cd $RemoteDir/current/tests && bash ./run-tests-on-server.sh"
 

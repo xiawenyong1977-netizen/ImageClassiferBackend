@@ -72,9 +72,32 @@ async def _submit_task_async_v2(
     logger.info(f"任务已创建(v2): {task_id}, 图片数: {total_images}")
     
     # 异步处理任务（不阻塞）
-    asyncio.create_task(_process_task_async_v2(
-        task_id, images, prompt, openid
-    ))
+    # 包装一个带超时的任务，避免后台任务无限期卡住
+    async def _process_with_timeout():
+        """带超时的后台任务包装器"""
+        logger.info(f"[后台任务] _process_with_timeout开始: task_id={task_id}")
+        try:
+            # 设置最大超时时间（60秒），如果超时就记录错误并返回
+            import asyncio
+            logger.info(f"[后台任务] 准备调用_process_task_async_v2: task_id={task_id}")
+            await asyncio.wait_for(
+                _process_task_async_v2(task_id, images, prompt, openid),
+                timeout=60.0  # 60秒超时
+            )
+            logger.info(f"[后台任务] _process_task_async_v2完成: task_id={task_id}")
+        except asyncio.TimeoutError:
+            logger.error(f"后台任务超时(v2): task_id={task_id}, 已超过60秒")
+            # 更新任务状态为失败
+            try:
+                await async_task_service.update_status(task_id, TaskStatus.FAILED)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"后台任务执行异常(v2): task_id={task_id}, 错误: {e}", exc_info=True)
+    
+    logger.info(f"[后台任务] 准备创建后台任务: task_id={task_id}")
+    asyncio.create_task(_process_with_timeout())
+    logger.info(f"[后台任务] 后台任务已创建: task_id={task_id}")
     
     return task_id
 
@@ -92,8 +115,11 @@ async def _process_task_async_v2(
     1. 使用 llm_service.edit_image（自动处理缓存，无需外部批量查询）
     2. 逐张处理图片，实时更新进度
     """
+    logger.info(f"[_process_task_async_v2] 方法开始执行: task_id={task_id}, images_count={len(images)}")
     try:
+        logger.info(f"[_process_task_async_v2] 准备更新任务状态为PROCESSING: task_id={task_id}")
         await async_task_service.update_status(task_id, TaskStatus.PROCESSING)
+        logger.info(f"[_process_task_async_v2] 任务状态已更新为PROCESSING: task_id={task_id}")
         
         # 1. 初始化结果数组
         all_results = [None] * len(images)

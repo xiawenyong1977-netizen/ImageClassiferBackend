@@ -128,43 +128,102 @@ class TestImageEditV2Batch:
         files = {"images": ("test.jpg", image_bytes, "image/jpeg")}
         data = {"image_metadata": json.dumps(metadata)}
         
-        response = await async_client.post(
-            "/api/v2/image-edit/batch",
-            files=files,
-            data=data
-        )
+        # 发送请求（不等待后台任务完成）
+        print("DEBUG: 开始发送请求...")
+        try:
+            response = await async_client.post(
+                "/api/v2/image-edit/batch",
+                files=files,
+                data=data,
+                timeout=10.0  # 设置10秒超时，避免卡住
+            )
+            print(f"DEBUG: 请求完成，status_code={response.status_code}")
+        except Exception as e:
+            print(f"ERROR: 请求失败: {type(e).__name__}: {e}")
+            raise
         
-        # 由于需要真实的 LLM 服务，这个测试可能会失败或返回内部错误
-        # 但我们可以验证响应结构
-        assert response.status_code == 200
-        response_data = response.json()
-        assert "task_id" in response_data
-        assert "total_images" in response_data
-        assert "request_id" in response_data
-        assert "error_type" in response_data
+        # 验证响应结构
+        print("DEBUG: 开始验证响应...")
+        if response.status_code != 200:
+            print(f"ERROR: 响应状态码不是200，实际为: {response.status_code}")
+            try:
+                error_detail = response.json()
+                print(f"ERROR: 错误响应内容: {error_detail}")
+            except Exception:
+                print(f"ERROR: 无法解析错误响应，原始内容: {response.text[:500]}")
+        assert response.status_code == 200, f"期望状态码200，实际为{response.status_code}"
+        print("DEBUG: status_code 验证通过")
         
-        # 如果 error_type 不是 SUCCESS，说明出现了内部错误（可能是缺少 LLM 配置）
-        # 在这种情况下，total_images 会是 0，这是可以接受的
-        if response_data["error_type"] == "SUCCESS":
-            assert response_data["total_images"] == 1
-        else:
-            # 验证错误信息存在
-            assert "error" in response_data
-            # 当出现错误时，total_images 可能是 0
-            assert response_data["total_images"] >= 0
+        try:
+            response_data = response.json()
+            print(f"DEBUG: response.json() 完成，task_id={response_data.get('task_id')}")
+        except Exception as e:
+            print(f"ERROR: 解析响应JSON失败: {type(e).__name__}: {e}")
+            print(f"ERROR: 原始响应内容: {response.text[:500]}")
+            raise
+        
+        if "task_id" not in response_data:
+            print(f"ERROR: 响应中缺少task_id字段，实际字段: {list(response_data.keys())}")
+        assert "task_id" in response_data, f"响应中缺少task_id字段，实际字段: {list(response_data.keys())}"
+        
+        if "total_images" not in response_data:
+            print(f"ERROR: 响应中缺少total_images字段，实际字段: {list(response_data.keys())}")
+        assert "total_images" in response_data, f"响应中缺少total_images字段，实际字段: {list(response_data.keys())}"
+        
+        if "request_id" not in response_data:
+            print(f"ERROR: 响应中缺少request_id字段，实际字段: {list(response_data.keys())}")
+        assert "request_id" in response_data, f"响应中缺少request_id字段，实际字段: {list(response_data.keys())}"
+        
+        if "error_type" not in response_data:
+            print(f"ERROR: 响应中缺少error_type字段，实际字段: {list(response_data.keys())}")
+        assert "error_type" in response_data, f"响应中缺少error_type字段，实际字段: {list(response_data.keys())}"
+        
+        if response_data.get("error_type") != "success":
+            print(f"ERROR: error_type不是'success'，实际为: {response_data.get('error_type')}")
+            print(f"ERROR: 完整响应数据: {response_data}")
+        assert response_data["error_type"] == "success", f"期望error_type='success'，实际为'{response_data.get('error_type')}'"
+        
+        if response_data.get("total_images") != 1:
+            print(f"ERROR: total_images不是1，实际为: {response_data.get('total_images')}")
+        assert response_data["total_images"] == 1, f"期望total_images=1，实际为{response_data.get('total_images')}"
+        
+        print("DEBUG: 所有断言通过，测试即将结束")
+        
+        # 给后台任务一点时间完成（最多等待2秒）
+        # 如果后台任务还在运行，pytest-asyncio 会等待它们完成，导致测试卡住
+        # 这里我们等待一小段时间，让后台任务有机会完成
+        import asyncio
+        print("DEBUG: 等待后台任务完成（最多2秒）...")
+        try:
+            await asyncio.wait_for(asyncio.sleep(2), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
+        print("DEBUG: 等待完成，测试结束")
     
     @pytest.mark.asyncio
     async def test_batch_edit_with_user_id(self, async_client, setup_test_db):
         """测试带 user_id 的提交"""
-        # 先创建测试绑定数据
+        # 先清理可能存在的旧数据，然后创建测试绑定数据和用户记录
         async with db.get_connection() as conn:
             async with conn.cursor() as cursor:
+                # 清理可能存在的旧任务（避免干扰）
+                await cursor.execute("DELETE FROM async_tasks WHERE task_id LIKE 'task_%' AND user_id = 'test_user_edit'")
+                # 清理可能存在的旧绑定数据
+                await cursor.execute("DELETE FROM wechat_qrcode_bindings WHERE client_id = 'test_user_edit'")
+                # 创建绑定数据
                 await cursor.execute("""
                     INSERT INTO wechat_qrcode_bindings 
                     (client_id, scene_id, openid, status, completed_at)
                     VALUES 
                     ('test_user_edit', 'test_scene', 'test_openid_edit', 'completed', NOW())
-                    ON DUPLICATE KEY UPDATE openid = 'test_openid_edit', status = 'completed'
+                """)
+                # 清理并创建用户记录（用于额度检查）- 先删除再插入，确保数据一致
+                await cursor.execute("DELETE FROM wechat_users WHERE openid = 'test_openid_edit'")
+                await cursor.execute("""
+                    INSERT INTO wechat_users 
+                    (openid, remaining_credits, used_credits, is_member, member_expire_at)
+                    VALUES 
+                    ('test_openid_edit', 100, 0, 0, NULL)
                 """)
                 await conn.commit()
         
@@ -178,25 +237,79 @@ class TestImageEditV2Batch:
         files = {"images": ("test.jpg", image_bytes, "image/jpeg")}
         data = {"image_metadata": json.dumps(metadata)}
         
-        response = await async_client.post(
-            "/api/v2/image-edit/batch",
-            files=files,
-            data=data,
-            headers={"X-User-ID": "test_user_edit"}
-        )
-        
-        # 清理测试数据
+        # 发送请求（不等待后台任务完成）
+        print("DEBUG: 开始发送请求...")
         try:
-            async with db.get_cursor() as cursor:
-                await cursor.execute("DELETE FROM wechat_qrcode_bindings WHERE client_id = 'test_user_edit'")
-        except Exception:
-            pass
+            response = await async_client.post(
+                "/api/v2/image-edit/batch",
+                files=files,
+                data=data,
+                headers={"X-User-ID": "test_user_edit"},
+                timeout=10.0  # 设置10秒超时，避免卡住
+            )
+            print(f"DEBUG: 请求完成，status_code={response.status_code}")
+        except Exception as e:
+            print(f"ERROR: 请求失败: {type(e).__name__}: {e}")
+            raise
         
         # 验证响应结构
-        if response.status_code == 200:
-            data = response.json()
-            assert "task_id" in data
-            assert data["error_type"] == "SUCCESS"
+        print("DEBUG: 开始验证响应...")
+        if response.status_code != 200:
+            print(f"ERROR: 响应状态码不是200，实际为: {response.status_code}")
+            try:
+                error_detail = response.json()
+                print(f"ERROR: 错误响应内容: {error_detail}")
+            except Exception:
+                print(f"ERROR: 无法解析错误响应，原始内容: {response.text[:500]}")
+        assert response.status_code == 200, f"期望状态码200，实际为{response.status_code}"
+        print("DEBUG: status_code 验证通过")
+        
+        try:
+            response_data = response.json()
+            print(f"DEBUG: response.json() 完成，task_id={response_data.get('task_id')}")
+        except Exception as e:
+            print(f"ERROR: 解析响应JSON失败: {type(e).__name__}: {e}")
+            print(f"ERROR: 原始响应内容: {response.text[:500]}")
+            raise
+        
+        if "task_id" not in response_data:
+            print(f"ERROR: 响应中缺少task_id字段，实际字段: {list(response_data.keys())}")
+        assert "task_id" in response_data, f"响应中缺少task_id字段，实际字段: {list(response_data.keys())}"
+        
+        if response_data.get("error_type") != "success":
+            print(f"ERROR: error_type不是'success'，实际为: {response_data.get('error_type')}")
+            print(f"ERROR: 完整响应数据: {response_data}")
+        assert response_data["error_type"] == "success", f"期望error_type='success'，实际为'{response_data.get('error_type')}'"
+        
+        if response_data.get("total_images") != 1:
+            print(f"ERROR: total_images不是1，实际为: {response_data.get('total_images')}")
+        assert response_data["total_images"] == 1, f"期望total_images=1，实际为{response_data.get('total_images')}"
+        
+        print("DEBUG: 所有断言通过，测试即将结束")
+        
+        # 给后台任务一点时间完成（最多等待2秒）
+        # 如果后台任务还在运行，pytest-asyncio 会等待它们完成，导致测试卡住
+        # 这里我们等待一小段时间，让后台任务有机会完成
+        import asyncio
+        print("DEBUG: 等待后台任务完成（最多2秒）...")
+        try:
+            await asyncio.wait_for(asyncio.sleep(2), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
+        print("DEBUG: 等待完成，测试结束")
+        
+        # 给后台任务一点时间完成（最多等待2秒）
+        # 如果后台任务还在运行，pytest-asyncio 会等待它们完成，导致测试卡住
+        # 这里我们等待一小段时间，让后台任务有机会完成
+        import asyncio
+        print("DEBUG: 等待后台任务完成（最多2秒）...")
+        try:
+            await asyncio.wait_for(asyncio.sleep(2), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
+        print("DEBUG: 等待完成，测试结束")
+        
+        # 注意：测试数据会在下次测试开始时清理并重新创建，确保每次测试都从干净状态开始
 
 
 class TestImageEditV2TaskStatus:

@@ -18,6 +18,24 @@ class Database:
     
     async def connect(self):
         """创建数据库连接池"""
+        # 如果连接池已存在，直接返回（避免重复创建）
+        if self.pool is not None:
+            try:
+                # 检查连接池是否仍然有效
+                async with self.pool.acquire() as conn:
+                    await conn.ping()
+                logger.debug("数据库连接池已存在且有效，跳过创建")
+                return
+            except Exception:
+                # 如果连接池无效，关闭它并重新创建
+                logger.debug("检测到无效的连接池，将重新创建")
+                try:
+                    self.pool.close()
+                    await self.pool.wait_closed()
+                except Exception:
+                    pass
+                self.pool = None
+        
         try:
             # 如果配置了 unix_socket，优先使用 socket 连接
             if settings.MYSQL_UNIX_SOCKET:
@@ -89,11 +107,13 @@ class Database:
     @asynccontextmanager
     async def get_connection(self):
         """获取数据库连接（上下文管理器）"""
+        logger.info(f"[database] get_connection开始: pool存在={self.pool is not None}")
         # 如果连接池不存在或绑定到了不同的事件循环，重新创建
         import asyncio
         current_loop = asyncio.get_running_loop()
         
         if not self.pool:
+            logger.info(f"[database] 连接池不存在，准备创建...")
             await self.connect()
         else:
             # 检查连接池是否绑定到当前事件循环
@@ -117,16 +137,22 @@ class Database:
                 pass
         
         try:
+            logger.info(f"[database] 准备从连接池获取连接...")
             async with self.pool.acquire() as conn:
+                logger.info(f"[database] 已从连接池获取连接，准备ping...")
                 try:
                     # 确保连接可用并设置会话级隔离级别与autocommit
                     await conn.ping()
+                    logger.info(f"[database] ping成功，准备设置会话参数...")
                     async with conn.cursor() as cursor:
                         await cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
                         await cursor.execute("SET autocommit=1")
+                    logger.info(f"[database] 会话参数设置完成")
                 except Exception as e:
                     logger.warning(f"数据库连接会话初始化失败: {e}")
+                logger.info(f"[database] 准备yield连接...")
                 yield conn
+                logger.info(f"[database] 连接已返回给调用者")
         except RuntimeError as e:
             # 检查是否是事件循环问题
             error_msg = str(e).lower()
@@ -173,7 +199,9 @@ class Database:
     @asynccontextmanager
     async def get_cursor(self):
         """获取游标（上下文管理器）"""
+        logger.info(f"[database] get_cursor开始...")
         async with self.get_connection() as conn:
+            logger.info(f"[database] get_cursor已获取连接，准备创建游标...")
             async with conn.cursor(aiomysql.DictCursor) as cursor:
                 yield cursor
                 await conn.commit()

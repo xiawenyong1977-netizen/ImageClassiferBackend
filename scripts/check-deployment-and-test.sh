@@ -77,6 +77,15 @@ ssh $SERVER "
 
 echo ""
 echo "[5/5] 运行自动化测试..."
+echo "  先转换 shell 脚本的行结束符..."
+ssh $SERVER "cd $REMOTE_DIR/current/tests && \
+    if command -v dos2unix >/dev/null 2>&1; then \
+        dos2unix run-tests-on-server.sh 2>/dev/null && echo '  ✓ 使用 dos2unix 转换完成'; \
+    elif command -v sed >/dev/null 2>&1; then \
+        sed -i 's/\r\$//' run-tests-on-server.sh 2>/dev/null && echo '  ✓ 使用 sed 转换完成'; \
+    else \
+        python3 -c \"f='run-tests-on-server.sh'; d=open(f,'rb').read().replace(b'\r\n',b'\n'); open(f,'wb').write(d)\" 2>/dev/null && echo '  ✓ 使用 python3 转换完成'; \
+    fi"
 echo "执行测试脚本: cd $REMOTE_DIR/current/tests && ./run-tests-on-server.sh"
 ssh $SERVER "cd $REMOTE_DIR/current/tests && bash ./run-tests-on-server.sh"
 

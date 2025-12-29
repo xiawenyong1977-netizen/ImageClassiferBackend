@@ -49,6 +49,21 @@ cp requirements.txt "$NEW_VERSION_DIR/"
 cp gunicorn_config.py "$NEW_VERSION_DIR/" 2>/dev/null || true
 cp env.example "$NEW_VERSION_DIR/" 2>/dev/null || true
 cp -r prompts "$NEW_VERSION_DIR/" 2>/dev/null || true
+cp -r tests "$NEW_VERSION_DIR/" 2>/dev/null || true
+
+# 转换 shell 脚本的行结束符（CRLF -> LF）
+echo "  转换 .sh 文件的行结束符..."
+find "$NEW_VERSION_DIR" -name "*.sh" -type f | while read file; do
+    if command -v dos2unix >/dev/null 2>&1; then
+        dos2unix "$file" 2>/dev/null || true
+    elif command -v sed >/dev/null 2>&1; then
+        sed -i "s/\r$//" "$file" 2>/dev/null || true
+    else
+        perl -pi -e "s/\r\n/\n/" "$file" 2>/dev/null || \
+        python3 -c "import sys; data=open('$file','rb').read().replace(b'\r\n',b'\n'); open('$file','wb').write(data)" 2>/dev/null || true
+    fi
+done
+echo "  ✓ 行结束符转换完成"
 
 # 创建或使用共享虚拟环境
 echo -e "${YELLOW}[3/6] 检查共享虚拟环境...${NC}"
