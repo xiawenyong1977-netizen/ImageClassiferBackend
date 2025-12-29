@@ -1027,8 +1027,8 @@ class LLMService:
         # 文本生成默认使用Deepseek
         # 如果当前provider不是deepseek，创建临时的Deepseek适配器
         if self.provider.lower() != "deepseek":
-            # 使用用户提供的API Key（如果构造函数中提供了）
-            deepseek_api_key = kwargs.get('api_key', self.api_key)
+            # 优先使用用户提供的API Key，其次使用DEEPSEEK_API_KEY配置，最后回退到LLM_API_KEY
+            deepseek_api_key = kwargs.get('api_key') or settings.DEEPSEEK_API_KEY or self.api_key
             if not deepseek_api_key:
                 # 如果没有提供API Key，记录错误日志并返回
                 logger.error("文本生成失败：未提供Deepseek API Key")

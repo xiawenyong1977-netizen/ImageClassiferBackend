@@ -19,20 +19,36 @@ class Database:
     async def connect(self):
         """创建数据库连接池"""
         try:
-            self.pool = await aiomysql.create_pool(
-                host=settings.MYSQL_HOST,
-                port=settings.MYSQL_PORT,
-                user=settings.MYSQL_USER,
-                password=settings.MYSQL_PASSWORD,
-                db=settings.MYSQL_DATABASE,
-                charset='utf8mb4',
-                minsize=1,
-                maxsize=settings.MYSQL_POOL_SIZE,
-                autocommit=True,
-                pool_recycle=300,
-                echo=settings.APP_DEBUG
-            )
-            logger.info(f"数据库连接池已创建: {settings.MYSQL_HOST}:{settings.MYSQL_PORT}/{settings.MYSQL_DATABASE}")
+            # 如果配置了 unix_socket，优先使用 socket 连接
+            if settings.MYSQL_UNIX_SOCKET:
+                self.pool = await aiomysql.create_pool(
+                    unix_socket=settings.MYSQL_UNIX_SOCKET,
+                    user=settings.MYSQL_USER,
+                    password=settings.MYSQL_PASSWORD,
+                    db=settings.MYSQL_DATABASE,
+                    charset='utf8mb4',
+                    minsize=1,
+                    maxsize=settings.MYSQL_POOL_SIZE,
+                    autocommit=True,
+                    pool_recycle=300,
+                    echo=settings.APP_DEBUG
+                )
+                logger.info(f"数据库连接池已创建（使用socket）: {settings.MYSQL_UNIX_SOCKET}/{settings.MYSQL_DATABASE}")
+            else:
+                self.pool = await aiomysql.create_pool(
+                    host=settings.MYSQL_HOST,
+                    port=settings.MYSQL_PORT,
+                    user=settings.MYSQL_USER,
+                    password=settings.MYSQL_PASSWORD,
+                    db=settings.MYSQL_DATABASE,
+                    charset='utf8mb4',
+                    minsize=1,
+                    maxsize=settings.MYSQL_POOL_SIZE,
+                    autocommit=True,
+                    pool_recycle=300,
+                    echo=settings.APP_DEBUG
+                )
+                logger.info(f"数据库连接池已创建: {settings.MYSQL_HOST}:{settings.MYSQL_PORT}/{settings.MYSQL_DATABASE}")
         except Exception as e:
             logger.error(f"数据库连接失败: {e}")
             raise
@@ -75,11 +91,14 @@ class Database:
         else:
             # 检查连接池是否绑定到当前事件循环
             # 如果pool是在不同的事件循环中创建的，需要重新创建
+            # 注意：在 Gunicorn 多 worker 模式下，每个 worker 都有自己的事件循环
+            # 这是正常现象，连接池会在每个 worker 中重新创建
             try:
                 # 尝试检查pool的内部状态（aiomysql的pool._loop）
                 pool_loop = getattr(self.pool, '_loop', None)
                 if pool_loop is not None and pool_loop != current_loop:
-                    logger.warning("检测到数据库连接池绑定到不同的事件循环，重新创建连接池")
+                    # 只在 DEBUG 模式下记录详细信息，避免过多警告日志
+                    logger.debug(f"检测到数据库连接池绑定到不同的事件循环（pool_loop: {pool_loop}, current_loop: {current_loop}），重新创建连接池")
                     try:
                         self.pool.close()
                         await self.pool.wait_closed()

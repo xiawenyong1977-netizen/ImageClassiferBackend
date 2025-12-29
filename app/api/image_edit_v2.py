@@ -336,7 +336,7 @@ async def batch_edit_v2(
             request_id=request_id,
             request_type="batch_image_edit",
             total_images=len(image_data_list),
-            user_id=user_id,
+            client_id=user_id,
             openid=openid,
             ip_address=request.client.host if request else None
         )

@@ -1,11 +1,14 @@
 """
 配置管理模块
 使用pydantic-settings进行环境变量管理
+支持从文件加载提示词配置
 """
 
+import os
+from pathlib import Path
 from pydantic_settings import BaseSettings
-from pydantic import Field, ConfigDict
-from typing import List
+from pydantic import Field, ConfigDict, field_validator
+from typing import List, Optional
 
 
 class Settings(BaseSettings):
@@ -17,6 +20,7 @@ class Settings(BaseSettings):
     MYSQL_USER: str = Field(default="root", description="MySQL用户名")
     MYSQL_PASSWORD: str = Field(default="", description="MySQL密码")
     MYSQL_DATABASE: str = Field(default="image_classifier", description="数据库名")
+    MYSQL_UNIX_SOCKET: Optional[str] = Field(default=None, description="MySQL Unix Socket路径（如果指定，将优先使用socket连接）")
     MYSQL_POOL_SIZE: int = Field(default=10, description="连接池大小")
     MYSQL_MAX_OVERFLOW: int = Field(default=5, description="最大溢出连接数")
     
@@ -28,6 +32,9 @@ class Settings(BaseSettings):
     LLM_TIMEOUT: int = Field(default=30, description="请求超时(秒)")
     LLM_MAX_RETRIES: int = Field(default=3, description="最大重试次数")
     LLM_RETRY_DELAY: float = Field(default=1.0, description="重试延迟(秒)")
+    
+    # Deepseek API密钥（用于文本生成功能，如果未配置则使用LLM_API_KEY）
+    DEEPSEEK_API_KEY: Optional[str] = Field(default=None, description="Deepseek API密钥（可选，用于文本生成功能）")
     
     # ===== 本地推理配置 =====
     USE_LOCAL_INFERENCE: bool = Field(default=False, description="是否使用本地推理（开启后不调用大模型）")
@@ -296,9 +303,14 @@ class Settings(BaseSettings):
         return [fmt.strip().lower() for fmt in self.ALLOWED_IMAGE_FORMATS.split(",")]
     
     model_config = ConfigDict(
-        env_file=".env",
+        # 支持多个环境变量文件，按顺序加载，后面的会覆盖前面的
+        # 1. 先加载 .env（非敏感配置）
+        # 2. 再加载 .env.secrets（敏感配置，如果存在）
+        env_file=[".env", ".env.secrets"],
         env_file_encoding="utf-8",
-        case_sensitive=True
+        case_sensitive=True,
+        # 允许从环境变量覆盖（优先级最高）
+        extra="ignore"
     )
 
 
