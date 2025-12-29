@@ -81,14 +81,29 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          # 检查文件是否存在
+          echo "检查依赖文件..."
+          ls -la requirements*.txt || echo "未找到 requirements 文件"
+          pwd
           # CI 环境先安装 CPU 版本的 PyTorch（节省磁盘空间，避免安装 CUDA 版本）
           # 这样可以避免 ultralytics 自动安装完整的 CUDA 版本
+          echo "安装 PyTorch CPU 版本..."
           pip install --no-cache-dir torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cpu
           # 然后安装其他依赖（ultralytics 会检测到已安装的 torch，不会重新安装）
           if [ -f requirements-ci.txt ]; then
+            echo "使用 requirements-ci.txt 安装依赖..."
+            # 确保 requirements.txt 存在（某些包可能需要它）
+            if [ ! -f requirements.txt ]; then
+              echo "警告: requirements.txt 不存在，创建符号链接..."
+              cp requirements-ci.txt requirements.txt || true
+            fi
             pip install --no-cache-dir -r requirements-ci.txt
-          else
+          elif [ -f requirements.txt ]; then
+            echo "使用 requirements.txt 安装依赖..."
             pip install --no-cache-dir -r requirements.txt
+          else
+            echo "错误: 未找到 requirements-ci.txt 或 requirements.txt"
+            exit 1
           fi
           # pytest相关依赖已在requirements.txt中
           # 安装后再次清理
@@ -166,6 +181,11 @@ jobs:
           mkdir -p deploy-package
           # 复制需要部署的文件
           cp -r app deploy-package/
+          if [ ! -f requirements.txt ]; then
+            echo "错误: requirements.txt 文件不存在"
+            ls -la
+            exit 1
+          fi
           cp requirements.txt deploy-package/
           cp gunicorn_config.py deploy-package/
           cp env.example deploy-package/
@@ -197,12 +217,16 @@ jobs:
           # 复制文件到新版本目录
           echo "[1/6] 复制文件到版本目录..."
           cp -r app "$NEW_VERSION_DIR/"
-          cp requirements.txt "$NEW_VERSION_DIR/"
+          if [ -f requirements.txt ]; then
+            cp requirements.txt "$NEW_VERSION_DIR/"
+          else
+            echo "错误: requirements.txt 文件不存在"
+            exit 1
+          fi
           cp gunicorn_config.py "$NEW_VERSION_DIR/" 2>/dev/null || true
           cp env.example "$NEW_VERSION_DIR/" 2>/dev/null || true
           cp -r prompts "$NEW_VERSION_DIR/" 2>/dev/null || true
           cp -r tests "$NEW_VERSION_DIR/" 2>/dev/null || true
-          cp pytest.ini "$NEW_VERSION_DIR/" 2>/dev/null || true
           cp pytest.ini "$NEW_VERSION_DIR/" 2>/dev/null || true
           
           # 创建或使用共享虚拟环境
@@ -228,6 +252,10 @@ jobs:
             pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cpu --quiet
             # 然后安装其他依赖
             echo "    安装其他依赖..."
+            if [ ! -f "$NEW_VERSION_DIR/requirements.txt" ]; then
+              echo "错误: requirements.txt 文件不存在: $NEW_VERSION_DIR/requirements.txt"
+              exit 1
+            fi
             pip install -r "$NEW_VERSION_DIR/requirements.txt" --quiet
             deactivate
             echo "  ✓ 共享虚拟环境已创建并安装依赖"
@@ -237,6 +265,10 @@ jobs:
             echo "  检查依赖更新..."
             source "$SHARED_VENV/bin/activate"
             pip install --upgrade pip --quiet
+            if [ ! -f "$NEW_VERSION_DIR/requirements.txt" ]; then
+              echo "错误: requirements.txt 文件不存在: $NEW_VERSION_DIR/requirements.txt"
+              exit 1
+            fi
             pip install -r "$NEW_VERSION_DIR/requirements.txt" --quiet --upgrade
             deactivate
           fi
