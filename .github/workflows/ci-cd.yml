@@ -44,11 +44,36 @@ jobs:
 
     steps:
       - name: Checkout code
+        id: checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # 获取完整历史，确保所有文件都被检出
 
       - name: Verify checkout
+        run: |
+          echo "=========================================="
+          echo "检查 checkout 是否成功..."
+          echo "=========================================="
+          echo "当前工作目录: $(pwd)"
+          echo ""
+          echo "列出根目录文件:"
+          ls -la
+          echo ""
+          echo "检查 .git 目录:"
+          if [ -d .git ]; then
+            echo "✓ .git 目录存在"
+            echo "Git 仓库信息:"
+            git rev-parse --git-dir
+            git rev-parse HEAD || echo "无法获取 HEAD"
+          else
+            echo "✗ .git 目录不存在"
+            echo "错误: checkout 失败，代码未被检出"
+            echo "检查父目录:"
+            ls -la ..
+            exit 1
+          fi
+
+      - name: Verify files
         run: |
           echo "=========================================="
           echo "验证代码检出..."
@@ -57,6 +82,12 @@ jobs:
           echo ""
           echo "列出根目录文件:"
           ls -la
+          echo ""
+          echo "检查 Git 仓库状态:"
+          git status || echo "Git 状态检查失败"
+          echo ""
+          echo "检查 Git 远程仓库:"
+          git remote -v || echo "Git 远程仓库检查失败"
           echo ""
           echo "检查 requirements 文件是否存在:"
           if [ -f requirements.txt ]; then
@@ -73,10 +104,26 @@ jobs:
           fi
           echo ""
           echo "检查 Git 仓库中的文件:"
-          git ls-files requirements*.txt || echo "Git 中未找到文件"
-          echo ""
-          echo "检查文件是否被 Git 跟踪:"
-          git check-ignore requirements.txt requirements-ci.txt || echo "文件未被忽略"
+          if git rev-parse --git-dir > /dev/null 2>&1; then
+            git ls-files requirements*.txt || echo "Git 中未找到文件"
+            echo ""
+            echo "检查文件是否被 Git 跟踪:"
+            git check-ignore requirements.txt requirements-ci.txt || echo "文件未被忽略"
+          else
+            echo "错误: 当前目录不是 Git 仓库"
+            echo "尝试查找代码文件..."
+            find . -name "requirements*.txt" -type f 2>/dev/null || echo "未找到任何 requirements 文件"
+          fi
+          
+          # 如果文件不存在，尝试手动检出
+          if [ ! -f requirements.txt ] && [ ! -f requirements-ci.txt ]; then
+            echo ""
+            echo "警告: requirements 文件不存在，尝试检查 checkout 是否成功..."
+            if [ ! -d .git ]; then
+              echo "错误: .git 目录不存在，checkout 可能失败"
+              exit 1
+            fi
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -92,16 +139,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
       # 注意：由于磁盘空间限制，安装时会使用 --no-cache-dir，但缓存仍可用于恢复已下载的包
-
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@master
-        with:
-          root-reserve-mb: 512
-          swap-size-mb: 1024
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-          remove-codeql: 'true'
 
       - name: Free disk space
         run: |
