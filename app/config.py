@@ -1,11 +1,14 @@
 """
 配置管理模块
 使用pydantic-settings进行环境变量管理
+支持从文件加载提示词配置
 """
 
+import os
+from pathlib import Path
 from pydantic_settings import BaseSettings
-from pydantic import Field
-from typing import List
+from pydantic import Field, ConfigDict, field_validator
+from typing import List, Optional
 
 
 class Settings(BaseSettings):
@@ -17,6 +20,7 @@ class Settings(BaseSettings):
     MYSQL_USER: str = Field(default="root", description="MySQL用户名")
     MYSQL_PASSWORD: str = Field(default="", description="MySQL密码")
     MYSQL_DATABASE: str = Field(default="image_classifier", description="数据库名")
+    MYSQL_UNIX_SOCKET: Optional[str] = Field(default=None, description="MySQL Unix Socket路径（如果指定，将优先使用socket连接）")
     MYSQL_POOL_SIZE: int = Field(default=10, description="连接池大小")
     MYSQL_MAX_OVERFLOW: int = Field(default=5, description="最大溢出连接数")
     
@@ -26,6 +30,11 @@ class Settings(BaseSettings):
     LLM_MODEL: str = Field(default="gpt-4-vision-preview", description="模型名称")
     LLM_MAX_TOKENS: int = Field(default=500, description="最大token数")
     LLM_TIMEOUT: int = Field(default=30, description="请求超时(秒)")
+    LLM_MAX_RETRIES: int = Field(default=3, description="最大重试次数")
+    LLM_RETRY_DELAY: float = Field(default=1.0, description="重试延迟(秒)")
+    
+    # Deepseek API密钥（用于文本生成功能，如果未配置则使用LLM_API_KEY）
+    DEEPSEEK_API_KEY: Optional[str] = Field(default=None, description="Deepseek API密钥（可选，用于文本生成功能）")
     
     # ===== 本地推理配置 =====
     USE_LOCAL_INFERENCE: bool = Field(default=False, description="是否使用本地推理（开启后不调用大模型）")
@@ -102,6 +111,117 @@ class Settings(BaseSettings):
         description="图片分类提示词"
     )
     
+    COLOR_CLASSIFICATION_PROMPT: str = Field(
+        default="""请识别这张图片背景的主要颜色。
+
+背景颜色必须从以下10种颜色中选择一个：
+橙色、蓝色、红色、绿色、紫色、粉色、黄色、灰色、黑色、白色
+
+请以JSON格式返回结果：
+{
+    "background_color": "背景颜色（必须是：橙色、蓝色、红色、绿色、紫色、粉色、黄色、灰色、黑色、白色之一）",
+    "confidence": 0.95
+}
+
+只返回JSON，不要有其他文字。""",
+        description="颜色分类提示词"
+    )
+    
+    COMPOSITION_ANALYSIS_PROMPT: str = Field(
+        default="""请对这张照片的构图进行专业分析和点评。
+
+构图方式识别（必须从以下选择）：
+1. rule_of_thirds - 三分法构图（主体位于画面1/3或2/3处）
+2. center_composition - 中心构图（主体位于画面中心）
+3. symmetry - 对称构图（左右或上下对称）
+4. leading_lines - 引导线构图（利用线条引导视线）
+5. frame_within_frame - 框架构图（利用前景形成框架）
+6. diagonal - 对角线构图（主体沿对角线分布）
+7. golden_ratio - 黄金分割构图（符合黄金分割比例）
+8. negative_space - 留白构图（大量留白突出主体）
+9. other - 其他构图方式
+
+请从以下维度进行详细分析：
+- 构图方式：识别主要使用的构图技巧
+- 主体位置：分析主体在画面中的位置是否合理
+- 视觉平衡：评价画面的视觉平衡感
+- 空间布局：分析前景、中景、背景的关系
+- 线条与形状：识别画面中的线条和形状元素
+- 优点：指出构图上的优点
+- 改进建议：提供构图改进建议（如果有）
+
+请以JSON格式返回结果：
+{
+    "composition_type": "构图类型key（必须是上述9个之一）",
+    "confidence": 0.9,
+    "subject_position": "主体位置详细描述（如：位于画面右侧1/3处，略微偏上）",
+    "visual_balance": "视觉平衡评价（好/一般/需改进）",
+    "spatial_layout": "空间布局分析（前景、中景、背景关系，50字以内）",
+    "lines_and_shapes": "线条与形状分析（识别主要线条和形状元素，50字以内）",
+    "strengths": ["优点1（30字以内）", "优点2（30字以内）"],
+    "suggestions": ["建议1（30字以内，如无建议可为空）", "建议2（30字以内，如无建议可为空）"],
+    "score": 8.5,
+    "detailed_analysis": "详细构图分析（150字以内，中文）"
+}
+
+只返回JSON，不要有其他文字。""",
+        description="构图分析提示词"
+    )
+    
+    FACE_FORTUNE_PROMPT: str = Field(
+        default="""你是一位精通东方面相学和周易玄学的资深命理大师。
+根据用户上传的自拍照和咨询事项，进行深度分析。
+
+【当前时间】：{time}
+【求测事项】：{event}
+
+请分析此面相在此刻对该事项的影响。
+
+请从以下维度进行面相分析：
+1. 额头（forehead）：分析额头特征，包括宽度、高度、纹路等
+2. 眼睛（eyes）：分析眼睛特征，包括眼神、眼型、眼距等
+3. 鼻子（nose）：分析鼻子特征，包括鼻型、鼻梁、鼻翼等
+4. 嘴巴（mouth）：分析嘴巴特征，包括唇形、嘴角、唇色等
+5. 整体（overall）：综合分析整体面相特征和气场
+
+基于面相分析，预测该事项的吉凶：
+- 状态（status）：大吉/吉/中平/小凶/凶
+- 评分（score）：0-100分的数值评分
+- 总结（summary）：对该事项的总体预测（100字以内）
+- 建议（advice）：给出具体的建议（数组形式，每条30字以内）
+- 化解方法（remedy）：如有不利，提供化解方法（50字以内，如无不利可为空）
+
+时间反思（timeReflection）：结合当前时间，分析此时进行该事项的时机是否合适（100字以内）
+
+内容合规检查：
+- isCompliant：内容是否合规（true/false）
+- complianceReason：合规性说明（如不合规需说明原因）
+
+请以严格的JSON格式返回结果，不得包含Markdown标签：
+{
+    "isCompliant": true,
+    "complianceReason": "内容合规",
+    "faceAnalysis": {
+        "forehead": "额头分析（50字以内）",
+        "eyes": "眼睛分析（50字以内）",
+        "nose": "鼻子分析（50字以内）",
+        "mouth": "嘴巴分析（50字以内）",
+        "overall": "整体面相分析（100字以内）"
+    },
+    "eventAnalysis": {
+        "status": "大吉/吉/中平/小凶/凶",
+        "score": 85,
+        "summary": "对该事项的总体预测（100字以内）",
+        "advice": ["建议1（30字以内）", "建议2（30字以内）"],
+        "remedy": "化解方法（50字以内，如无不利可为空字符串）"
+    },
+    "timeReflection": "时间反思（100字以内）"
+}
+
+只返回JSON，不要有其他文字。""",
+        description="面相预测提示词"
+    )
+    
     # ===== 认证配置 =====
     JWT_SECRET_KEY: str = Field(
         default="your-secret-key-change-in-production-please-use-strong-random-key",
@@ -143,6 +263,21 @@ class Settings(BaseSettings):
         description="图像编辑结果图片的基础URL（新服务器域名）"
     )
     
+    # ===== 地理位置API配置 =====
+    GAODE_API_KEY: str = Field(default="", description="高德地图API密钥")
+    GAODE_API_URL: str = Field(
+        default="https://restapi.amap.com/v3/geocode/regeo",
+        description="高德地图逆地理编码API地址"
+    )
+    NOMINATIM_API_URL: str = Field(
+        default="https://nominatim.openstreetmap.org/reverse",
+        description="Nominatim逆地理编码API地址"
+    )
+    NOMINATIM_RATE_LIMIT: float = Field(
+        default=1.0,
+        description="Nominatim API调用频率限制（秒/请求）"
+    )
+    
     JWT_ALGORITHM: str = Field(default="HS256", description="JWT算法")
     JWT_ACCESS_TOKEN_EXPIRE_DAYS: int = Field(default=1, description="Token过期天数")
     
@@ -167,10 +302,16 @@ class Settings(BaseSettings):
         """获取允许的图片格式列表"""
         return [fmt.strip().lower() for fmt in self.ALLOWED_IMAGE_FORMATS.split(",")]
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    model_config = ConfigDict(
+        # 支持多个环境变量文件，按顺序加载，后面的会覆盖前面的
+        # 1. 先加载 .env（非敏感配置）
+        # 2. 再加载 .env.secrets（敏感配置，如果存在）
+        env_file=[".env", ".env.secrets"],
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        # 允许从环境变量覆盖（优先级最高）
+        extra="ignore"
+    )
 
 
 # 全局配置实例

@@ -88,7 +88,7 @@ class ImageUtils:
     @staticmethod
     def normalize_image_format(image_bytes: bytes) -> bytes:
         """
-        标准化图片格式，将特殊格式（如MPO）转换为标准格式（JPEG）
+        标准化图片格式，将特殊格式（如MPO、动态GIF）转换为标准格式（JPEG）
         
         Args:
             image_bytes: 原始图片二进制数据
@@ -107,6 +107,24 @@ class ImageUtils:
                     return converted
                 # 如果转换失败，返回原数据
                 return image_bytes
+            
+            # 如果是动态GIF，提取第一帧并转换为JPEG
+            if format_lower == "gif" and getattr(img, 'is_animated', False):
+                try:
+                    # 跳转到第一帧（确保获取第一帧）
+                    img.seek(0)
+                    # 转换为RGB模式（JPEG不支持调色板模式）
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    # 转换为JPEG
+                    output = io.BytesIO()
+                    img.save(output, format='JPEG', quality=95, optimize=True)
+                    return output.getvalue()
+                except Exception as e:
+                    from loguru import logger
+                    logger.warning(f"GIF动画格式转换失败: {e}")
+                    # 转换失败，返回原数据
+                    return image_bytes
             
             # 其他格式直接返回
             return image_bytes

@@ -20,6 +20,18 @@ try:
 except ImportError as e:
     logger.warning(f"本地推理模块导入失败，将禁用本地推理功能: {e}")
     local_classify = None
+# 导入v2版本分类接口
+try:
+    from app.api import classify_v2
+except ImportError as e:
+    logger.warning(f"v2分类接口模块导入失败，v2接口不可用: {e}")
+    classify_v2 = None
+# 导入v2版本图像编辑接口
+try:
+    from app.api import image_edit_v2
+except ImportError as e:
+    logger.warning(f"v2图像编辑接口模块导入失败，v2接口不可用: {e}")
+    image_edit_v2 = None
 from app.api.auth import wechat_message_handler, wechat_verify
 
 
@@ -33,12 +45,16 @@ logger.add(
 
 # 如果配置了日志文件
 if settings.LOG_FILE:
-    logger.add(
-        settings.LOG_FILE,
-        rotation="100 MB",
-        retention="30 days",
-        level=settings.LOG_LEVEL
-    )
+    try:
+        logger.add(
+            settings.LOG_FILE,
+            rotation="100 MB",
+            retention="30 days",
+            level=settings.LOG_LEVEL
+        )
+    except (PermissionError, OSError) as e:
+        # 在CI环境或没有权限的情况下，跳过文件日志配置
+        logger.warning(f"无法创建日志文件 {settings.LOG_FILE}: {e}，将仅使用控制台日志")
 
 
 @asynccontextmanager
@@ -86,7 +102,9 @@ app.add_middleware(
 # 注册路由
 app.include_router(auth.router)
 app.include_router(user.router)  # 用户管理（额度查询）
-app.include_router(classify.router)
+app.include_router(classify.router)  # v1版本分类接口
+if classify_v2 is not None:
+    app.include_router(classify_v2.router)  # v2版本分类接口
 if local_classify is not None:
     app.include_router(local_classify.router)  # 本地模型推理
 app.include_router(config.router)  # 运行时配置
@@ -94,7 +112,14 @@ app.include_router(release.router)  # 发行版本上传
 app.include_router(stats.router)
 app.include_router(health.router)
 app.include_router(location.router)
-app.include_router(image_edit.router)  # 图像编辑
+try:
+    from app.api import location_v2
+    app.include_router(location_v2.router)  # 地理位置API v2版本
+except ImportError:
+    logger.warning("location_v2模块导入失败，v2接口不可用")
+app.include_router(image_edit.router)  # 图像编辑（v1版本）
+if image_edit_v2 is not None:
+    app.include_router(image_edit_v2.router)  # 图像编辑（v2版本）
 app.include_router(payment.router)  # 支付功能
 
 # 微信公众号服务器配置验证接口（GET请求）

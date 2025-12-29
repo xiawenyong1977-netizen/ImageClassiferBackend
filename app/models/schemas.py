@@ -3,7 +3,7 @@ API请求和响应数据模型
 使用Pydantic进行数据验证
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
@@ -18,7 +18,7 @@ class CheckCacheRequest(BaseModel):
 
 class BatchCheckCacheRequest(BaseModel):
     """批量检查缓存请求"""
-    image_hashes: List[str] = Field(..., description="图片SHA-256哈希值列表", min_items=1, max_items=100)
+    image_hashes: List[str] = Field(..., description="图片SHA-256哈希值列表", min_length=1, max_length=100)
     user_id: Optional[str] = Field(None, description="用户ID/设备ID")
 
 
@@ -129,4 +129,6 @@ class HealthCheckResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now)
     database: str = Field(..., description="数据库状态")
     model_api: str = Field(..., description="模型API状态")
+    
+    model_config = ConfigDict(protected_namespaces=())
 

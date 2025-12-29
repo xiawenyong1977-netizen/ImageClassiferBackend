@@ -17,6 +17,7 @@ from app.database import db
 from app.config import settings
 from app.utils.hash_utils import calculate_hash
 from app.services.credit_service import credit_service
+from app.services.credits_usage_service import credits_usage_service
 
 
 class ImageEditService:
@@ -366,11 +367,13 @@ class ImageEditService:
                                 logger.warning(f"扣减额度失败: {msg}")
                         
                         # 记录额度消耗（包含详细信息）
-                        await cursor.execute(
-                            """INSERT INTO credits_usage 
-                               (openid, task_id, task_type, credits_used, request_image_count, success_image_count)
-                               VALUES (%s, %s, 'image_edit', %s, %s, %s)""",
-                            (openid, task_id, api_count, total_images, success_count)
+                        await credits_usage_service.log_usage(
+                            openid=openid,
+                            task_id=task_id,
+                            task_type='image_edit',
+                            credits_used=api_count,
+                            request_image_count=total_images,
+                            success_image_count=success_count
                         )
                         
                         logger.info(f"已扣除额度: openid={openid[:16]}..., 扣除={api_count}张(总请求={total_images}张, 成功={success_count}, 缓存={cache_count}, API={api_count})")

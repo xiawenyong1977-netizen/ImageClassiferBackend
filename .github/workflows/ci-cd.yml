@@ -1,0 +1,578 @@
+name: CI/CD Pipeline
+
+on:
+  # 所有分支push时都触发测试（允许在feature分支上多次提交并自动测试）
+  push:
+  # PR 时也触发测试
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+
+env:
+  PYTHON_VERSION: '3.10'
+  DEPLOY_DIR: /opt/ICBackend
+
+jobs:
+  # 测试任务
+  test:
+    name: Run Tests
+    # 使用 concurrency 避免重复运行：
+    # - 同一个分支的多次 push 会取消之前的运行，只运行最新的
+    # - PR 和对应的 push 使用相同的 group（基于分支名），避免重复运行
+    # 对于 PR 事件，使用 PR 的源分支名；对于 push 事件，使用当前分支名
+    # 使用 github.ref_name 获取分支名（去掉 refs/heads/ 前缀）
+    concurrency:
+      group: test-${{ github.event.pull_request.head.ref || github.ref_name }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_password
+          MYSQL_DATABASE: image_classifier_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - name: Checkout code
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史，确保所有文件都被检出
+
+      - name: Verify checkout
+        run: |
+          echo "=========================================="
+          echo "检查 checkout 是否成功..."
+          echo "=========================================="
+          echo "当前工作目录: $(pwd)"
+          echo ""
+          echo "列出根目录文件:"
+          ls -la
+          echo ""
+          echo "检查 .git 目录:"
+          if [ -d .git ]; then
+            echo "✓ .git 目录存在"
+            echo "Git 仓库信息:"
+            git rev-parse --git-dir
+            git rev-parse HEAD || echo "无法获取 HEAD"
+          else
+            echo "✗ .git 目录不存在"
+            echo "错误: checkout 失败，代码未被检出"
+            echo "检查父目录:"
+            ls -la ..
+            exit 1
+          fi
+
+      - name: Verify files
+        run: |
+          echo "=========================================="
+          echo "验证代码检出..."
+          echo "=========================================="
+          echo "当前工作目录: $(pwd)"
+          echo ""
+          echo "列出根目录文件:"
+          ls -la
+          echo ""
+          echo "检查 Git 仓库状态:"
+          git status || echo "Git 状态检查失败"
+          echo ""
+          echo "检查 Git 远程仓库:"
+          git remote -v || echo "Git 远程仓库检查失败"
+          echo ""
+          echo "检查 requirements 文件是否存在:"
+          if [ -f requirements.txt ]; then
+            echo "✓ requirements.txt 存在"
+            ls -lh requirements.txt
+          else
+            echo "✗ requirements.txt 不存在"
+          fi
+          if [ -f requirements-ci.txt ]; then
+            echo "✓ requirements-ci.txt 存在"
+            ls -lh requirements-ci.txt
+          else
+            echo "✗ requirements-ci.txt 不存在"
+          fi
+          echo ""
+          echo "检查 Git 仓库中的文件:"
+          if git rev-parse --git-dir > /dev/null 2>&1; then
+            git ls-files requirements*.txt || echo "Git 中未找到文件"
+            echo ""
+            echo "检查文件是否被 Git 跟踪:"
+            git check-ignore requirements.txt requirements-ci.txt || echo "文件未被忽略"
+          else
+            echo "错误: 当前目录不是 Git 仓库"
+            echo "尝试查找代码文件..."
+            find . -name "requirements*.txt" -type f 2>/dev/null || echo "未找到任何 requirements 文件"
+          fi
+          
+          # 如果文件不存在，尝试手动检出
+          if [ ! -f requirements.txt ] && [ ! -f requirements-ci.txt ]; then
+            echo ""
+            echo "警告: requirements 文件不存在，尝试检查 checkout 是否成功..."
+            if [ ! -d .git ]; then
+              echo "错误: .git 目录不存在，checkout 可能失败"
+              exit 1
+            fi
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'  # 启用 pip 缓存（但会在安装时清理）
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      # 注意：由于磁盘空间限制，安装时会使用 --no-cache-dir，但缓存仍可用于恢复已下载的包
+
+      - name: Install system dependencies
+        run: |
+          echo "安装系统依赖..."
+          sudo apt-get update
+          sudo apt-get install -y libzbar0
+          echo "✓ 系统依赖安装完成"
+
+      - name: Free disk space
+        run: |
+          # 清理 pip 缓存（在安装前）
+          pip cache purge || true
+          # 显示可用磁盘空间
+          df -h
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # 检查工作目录和文件
+          echo "=========================================="
+          echo "检查工作目录和依赖文件..."
+          echo "=========================================="
+          pwd
+          echo ""
+          echo "列出当前目录文件:"
+          ls -la
+          echo ""
+          echo "检查 requirements 文件:"
+          if ls requirements*.txt 2>/dev/null; then
+            echo "✓ 找到 requirements 文件"
+            ls -la requirements*.txt
+          else
+            echo "✗ 未找到 requirements*.txt 文件"
+            echo "检查 Git 仓库中的文件:"
+            git ls-files requirements*.txt || echo "Git 中也没有找到文件"
+            echo ""
+            echo "列出根目录所有文件:"
+            find . -maxdepth 1 -type f -name "*.txt" | head -20
+            exit 1
+          fi
+          echo ""
+          # CI 环境先安装 CPU 版本的 PyTorch（节省磁盘空间，避免安装 CUDA 版本）
+          # 这样可以避免 ultralytics 自动安装完整的 CUDA 版本
+          echo "安装 PyTorch CPU 版本..."
+          pip install --no-cache-dir torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cpu
+          # 然后安装其他依赖（ultralytics 会检测到已安装的 torch，不会重新安装）
+          if [ -f requirements-ci.txt ]; then
+            echo "使用 requirements-ci.txt 安装依赖..."
+            # 确保 requirements.txt 存在（某些包可能需要它）
+            if [ ! -f requirements.txt ]; then
+              echo "警告: requirements.txt 不存在，从 requirements-ci.txt 复制..."
+              cp requirements-ci.txt requirements.txt || true
+            fi
+            pip install --no-cache-dir -r requirements-ci.txt
+          elif [ -f requirements.txt ]; then
+            echo "使用 requirements.txt 安装依赖..."
+            pip install --no-cache-dir -r requirements.txt
+          else
+            echo "错误: 未找到 requirements-ci.txt 或 requirements.txt"
+            echo "当前目录内容:"
+            ls -la
+            exit 1
+          fi
+          # pytest相关依赖已在requirements.txt中
+          # 安装后再次清理
+          pip cache purge || true
+
+      - name: Run linting (optional)
+        run: |
+          pip install flake8 black || true
+          # flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
+          # black --check app/ || true
+
+      - name: Run tests
+        env:
+          MYSQL_HOST: localhost
+          MYSQL_PORT: 3306
+          MYSQL_USER: root
+          MYSQL_PASSWORD: test_password
+          MYSQL_DATABASE: image_classifier_test
+          APP_ENV: test
+          LOG_LEVEL: DEBUG
+          LLM_API_KEY: test-key-for-ci  # 测试用的API密钥（健康检查只检查是否配置，不实际调用）
+          # 不设置真实API密钥，真实API测试会自动跳过
+          # TEST_ALIYUN_API_KEY: (不设置，让真实测试自动跳过)
+          # TEST_OPENAI_API_KEY: (不设置，让真实测试自动跳过)
+          # TEST_CLAUDE_API_KEY: (不设置，让真实测试自动跳过)
+        run: |
+          # 运行所有测试（真实API测试会自动跳过，因为没有设置API密钥）
+          pytest tests/ -v --cov=app --cov-report=xml --cov-report=term
+          # 如果测试目录不存在，至少检查代码是否可以导入
+          python -c "from app.main import app; print('✓ App imports successfully')" || exit 1
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+
+  # 部署任务（仅在 main/master 分支推送时触发）
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate deployment version
+        id: version
+        run: |
+          VERSION=$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::8}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Deployment version: $VERSION"
+
+      - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+          echo "Host deploy-server" >> ~/.ssh/config
+          echo "  HostName $SSH_HOST" >> ~/.ssh/config
+          echo "  User $SSH_USER" >> ~/.ssh/config
+          echo "  IdentityFile ~/.ssh/deploy_key" >> ~/.ssh/config
+          echo "  StrictHostKeyChecking no" >> ~/.ssh/config
+
+      - name: Create deployment package
+        run: |
+          mkdir -p deploy-package
+          # 复制需要部署的文件
+          cp -r app deploy-package/
+          if [ ! -f requirements.txt ]; then
+            echo "错误: requirements.txt 文件不存在"
+            ls -la
+            exit 1
+          fi
+          cp requirements.txt deploy-package/
+          cp gunicorn_config.py deploy-package/
+          cp env.example deploy-package/
+          cp env.example.secrets deploy-package/ 2>/dev/null || true
+          cp -r prompts deploy-package/ 2>/dev/null || true
+          cp -r tests deploy-package/ 2>/dev/null || true
+          cp pytest.ini deploy-package/ 2>/dev/null || true
+          # 创建部署脚本
+          cat > deploy-package/deploy.sh << 'DEPLOY_SCRIPT'
+          #!/bin/bash
+          set -e
+          
+          DEPLOY_DIR="$1"
+          VERSION="$2"
+          CURRENT_LINK="$DEPLOY_DIR/current"
+          VERSIONS_DIR="$DEPLOY_DIR/versions"
+          NEW_VERSION_DIR="$VERSIONS_DIR/$VERSION"
+          SHARED_VENV="$DEPLOY_DIR/venv"  # 共享虚拟环境路径
+          PYTHON_VERSION="3.10"
+          
+          echo "========================================"
+          echo "开始部署版本: $VERSION"
+          echo "========================================"
+          
+          # 创建版本目录
+          mkdir -p "$VERSIONS_DIR"
+          mkdir -p "$NEW_VERSION_DIR"
+          
+          # 复制文件到新版本目录
+          echo "[1/6] 复制文件到版本目录..."
+          cp -r app "$NEW_VERSION_DIR/"
+          if [ -f requirements.txt ]; then
+            cp requirements.txt "$NEW_VERSION_DIR/"
+          else
+            echo "错误: requirements.txt 文件不存在"
+            exit 1
+          fi
+          cp gunicorn_config.py "$NEW_VERSION_DIR/" 2>/dev/null || true
+          cp env.example "$NEW_VERSION_DIR/" 2>/dev/null || true
+          cp -r prompts "$NEW_VERSION_DIR/" 2>/dev/null || true
+          cp -r tests "$NEW_VERSION_DIR/" 2>/dev/null || true
+          cp pytest.ini "$NEW_VERSION_DIR/" 2>/dev/null || true
+          
+          # 创建或使用共享虚拟环境
+          echo "[2/6] 检查共享虚拟环境..."
+          if [ ! -d "$SHARED_VENV" ]; then
+            echo "  创建共享虚拟环境..."
+            # 优先使用 python3.10，如果不存在则使用 python3
+            if command -v python${PYTHON_VERSION} &> /dev/null; then
+              python${PYTHON_VERSION} -m venv "$SHARED_VENV"
+            elif command -v python3 &> /dev/null; then
+              python3 -m venv "$SHARED_VENV"
+            else
+              echo "错误: 未找到 Python 3"
+              exit 1
+            fi
+            
+            # 安装依赖到共享虚拟环境
+            echo "  安装依赖到共享虚拟环境..."
+            source "$SHARED_VENV/bin/activate"
+            pip install --upgrade pip --quiet
+            # 先安装CPU版本的PyTorch（服务器无GPU，使用CPU版本节省空间）
+            echo "    安装PyTorch CPU版本..."
+            pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cpu --quiet
+            # 然后安装其他依赖
+            echo "    安装其他依赖..."
+            if [ ! -f "$NEW_VERSION_DIR/requirements.txt" ]; then
+              echo "错误: requirements.txt 文件不存在: $NEW_VERSION_DIR/requirements.txt"
+              exit 1
+            fi
+            pip install -r "$NEW_VERSION_DIR/requirements.txt" --quiet
+            deactivate
+            echo "  ✓ 共享虚拟环境已创建并安装依赖"
+          else
+            echo "  ✓ 共享虚拟环境已存在，跳过创建"
+            # 检查是否需要更新依赖
+            echo "  检查依赖更新..."
+            source "$SHARED_VENV/bin/activate"
+            pip install --upgrade pip --quiet
+            if [ ! -f "$NEW_VERSION_DIR/requirements.txt" ]; then
+              echo "错误: requirements.txt 文件不存在: $NEW_VERSION_DIR/requirements.txt"
+              exit 1
+            fi
+            pip install -r "$NEW_VERSION_DIR/requirements.txt" --quiet --upgrade
+            deactivate
+          fi
+          
+          # 在新版本目录创建指向共享虚拟环境的符号链接
+          echo "  创建虚拟环境符号链接..."
+          ln -sfn "$SHARED_VENV" "$NEW_VERSION_DIR/venv"
+          echo "  ✓ 已创建符号链接: $NEW_VERSION_DIR/venv -> $SHARED_VENV"
+          
+          # 检查并初始化配置文件（如果不存在）
+          # .env 和 .env.secrets 文件放在部署根目录，通过符号链接共享给所有版本
+          echo "[3/6] 检查配置文件..."
+          ENV_FILE="$DEPLOY_DIR/.env"
+          ENV_SECRETS_FILE="$DEPLOY_DIR/.env.secrets"
+          
+          if [ ! -f "$ENV_FILE" ]; then
+            echo "  从 env.example 创建 .env 文件..."
+            cp "$NEW_VERSION_DIR/env.example" "$ENV_FILE"
+            echo "  警告: 请编辑 $ENV_FILE 文件配置数据库和API密钥等敏感信息"
+          else
+            echo "  .env 文件已存在，跳过初始化"
+          fi
+          
+          if [ ! -f "$ENV_SECRETS_FILE" ]; then
+            if [ -f "$NEW_VERSION_DIR/env.example.secrets" ]; then
+              echo "  从 env.example.secrets 创建 .env.secrets 文件..."
+              cp "$NEW_VERSION_DIR/env.example.secrets" "$ENV_SECRETS_FILE"
+              chmod 600 "$ENV_SECRETS_FILE"
+              echo "  警告: 请编辑 $ENV_SECRETS_FILE 文件填入实际的敏感信息"
+            fi
+          else
+            echo "  .env.secrets 文件已存在，跳过初始化"
+          fi
+          
+          # 在新版本目录创建指向根目录配置文件的符号链接
+          ln -sfn "$ENV_FILE" "$NEW_VERSION_DIR/.env"
+          echo "  ✓ 已创建符号链接: $NEW_VERSION_DIR/.env -> $ENV_FILE"
+          if [ -f "$ENV_SECRETS_FILE" ]; then
+            ln -sfn "$ENV_SECRETS_FILE" "$NEW_VERSION_DIR/.env.secrets"
+            echo "  ✓ 已创建符号链接: $NEW_VERSION_DIR/.env.secrets -> $ENV_SECRETS_FILE"
+          fi
+          
+          # 获取当前版本
+          OLD_VERSION=""
+          if [ -L "$CURRENT_LINK" ]; then
+            OLD_VERSION=$(readlink -f "$CURRENT_LINK" 2>/dev/null | xargs basename 2>/dev/null || echo "")
+          fi
+          
+          # 切换版本
+          echo "[4/6] 切换版本..."
+          ln -sfn "$NEW_VERSION_DIR" "$CURRENT_LINK"
+          echo "  ✓ 版本已切换"
+          
+          # 重启服务
+          echo "[5/6] 重启服务..."
+          if systemctl is-active --quiet image-classifier 2>/dev/null; then
+            
+            systemctl restart image-classifier || {
+              echo "  错误: 服务重启失败"
+              # 尝试回退
+              if [ -n "$OLD_VERSION" ] && [ -d "$VERSIONS_DIR/$OLD_VERSION" ]; then
+                echo "  尝试回退到旧版本: $OLD_VERSION"
+                ln -sfn "$VERSIONS_DIR/$OLD_VERSION" "$CURRENT_LINK"
+                systemctl restart image-classifier
+                echo "  已回退到版本: $OLD_VERSION"
+              fi
+              exit 1
+            }
+            
+            # 等待服务启动
+            sleep 5
+            
+            # 健康检查
+            echo "[6/6] 健康检查..."
+            if systemctl is-active --quiet image-classifier; then
+              echo "  ✓ 服务运行正常"
+              echo "✓ 部署成功！版本 $VERSION 已激活"
+              echo "  当前版本: $VERSION"
+              if [ -n "$OLD_VERSION" ]; then
+                echo "  旧版本: $OLD_VERSION (已保留，可回退)"
+              fi
+            else
+              echo "  ✗ 服务启动失败"
+              # 回退
+              if [ -n "$OLD_VERSION" ] && [ -d "$VERSIONS_DIR/$OLD_VERSION" ]; then
+                echo "  回退到旧版本: $OLD_VERSION"
+                ln -sfn "$VERSIONS_DIR/$OLD_VERSION" "$CURRENT_LINK"
+                systemctl restart image-classifier
+                echo "  已回退到版本: $OLD_VERSION"
+              fi
+              exit 1
+            fi
+          else
+            echo "  服务未运行，跳过重启"
+            echo "  使用以下命令启动服务:"
+            echo "  systemctl start image-classifier"
+          fi
+          
+          # 清理旧版本（保留最近5个版本）
+          echo ""
+          echo "清理旧版本（保留最近5个版本）..."
+          cd "$VERSIONS_DIR"
+          KEEP_VERSIONS=5
+          if [ $(ls -1 | wc -l) -gt $KEEP_VERSIONS ]; then
+            ls -t | tail -n +$((KEEP_VERSIONS + 1)) | while read version; do
+              echo "  删除旧版本: $version"
+              rm -rf "$version"
+            done
+          fi
+          echo "✓ 清理完成"
+          
+          echo ""
+          echo "========================================"
+          echo "部署完成！"
+          echo "========================================"
+          DEPLOY_SCRIPT
+          chmod +x deploy-package/deploy.sh
+          
+          # 创建回退脚本
+          cat > deploy-package/rollback.sh << 'ROLLBACK_SCRIPT'
+          #!/bin/bash
+          set -e
+          
+          DEPLOY_DIR="$1"
+          TARGET_VERSION="$2"
+          CURRENT_LINK="$DEPLOY_DIR/current"
+          VERSIONS_DIR="$DEPLOY_DIR/versions"
+          
+          if [ -z "$TARGET_VERSION" ]; then
+            echo "用法: $0 <deploy_dir> <version>"
+            echo "可用版本:"
+            ls -1 "$VERSIONS_DIR" 2>/dev/null || echo "  无可用版本"
+            exit 1
+          fi
+          
+          TARGET_DIR="$VERSIONS_DIR/$TARGET_VERSION"
+          
+          if [ ! -d "$TARGET_DIR" ]; then
+            echo "错误: 版本 $TARGET_VERSION 不存在"
+            exit 1
+          fi
+          
+          echo "========================================"
+          echo "回退到版本: $TARGET_VERSION"
+          echo "========================================"
+          
+          # 切换版本
+          ln -sfn "$TARGET_DIR" "$CURRENT_LINK"
+          
+          # 重启服务
+          if systemctl is-active --quiet image-classifier 2>/dev/null; then
+            echo "重启服务..."
+            systemctl restart image-classifier
+            sleep 5
+            
+            if systemctl is-active --quiet image-classifier; then
+              echo "✓ 回退成功！当前版本: $TARGET_VERSION"
+            else
+              echo "✗ 服务启动失败"
+              exit 1
+            fi
+          else
+            echo "✓ 版本已切换，服务未运行"
+          fi
+          ROLLBACK_SCRIPT
+          chmod +x deploy-package/rollback.sh
+
+      - name: Upload deployment package
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          # 创建临时目录
+          ssh deploy-server "mkdir -p /tmp/deploy-${GITHUB_SHA::8}"
+          
+          # 上传部署包
+          scp -r deploy-package/* deploy-server:/tmp/deploy-${GITHUB_SHA::8}/
+          
+          # 执行部署
+          ssh deploy-server "cd /tmp/deploy-${GITHUB_SHA::8} && \
+            DEPLOY_DIR='${{ secrets.DEPLOY_DIR }}' && \
+            VERSION='${{ steps.version.outputs.version }}' && \
+            ./deploy.sh \"\$DEPLOY_DIR\" \"\$VERSION\""
+
+      - name: Health check
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          HEALTH_CHECK_URL: ${{ secrets.HEALTH_CHECK_URL }}
+        run: |
+          if [ -n "$HEALTH_CHECK_URL" ]; then
+            echo "执行健康检查..."
+            sleep 10
+            curl -f "$HEALTH_CHECK_URL" || {
+              echo "警告: 健康检查失败，但部署已完成"
+              exit 0
+            }
+            echo "✓ 健康检查通过"
+          else
+            echo "跳过健康检查（未配置 HEALTH_CHECK_URL）"
+          fi
+
+      - name: Cleanup
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        if: always()
+        run: |
+          ssh deploy-server "rm -rf /tmp/deploy-${GITHUB_SHA::8}" || true
+
