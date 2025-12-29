@@ -7,7 +7,7 @@
 set -e
 
 # 配置
-DEPLOY_DIR="${DEPLOY_DIR:-/opt/ImageClassifierBackend}"
+DEPLOY_DIR="${DEPLOY_DIR:-/opt/ICBackend}"
 CURRENT_LINK="$DEPLOY_DIR/current"
 VERSIONS_DIR="$DEPLOY_DIR/versions"
 
@@ -91,5 +91,6 @@ echo -e "${GREEN}========================================${NC}"
 echo "当前版本: $TARGET_VERSION"
 echo ""
 echo "查看服务状态: systemctl status image-classifier"
-echo "查看服务日志: journalctl -u image-classifier -f"
+echo "查看服务日志: tail -f /var/log/image-classifier/app.log"
+echo "查看最近日志: tail -n 100 /var/log/image-classifier/app.log"
 

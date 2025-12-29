@@ -289,6 +289,7 @@ jobs:
           cp env.example.secrets deploy-package/ 2>/dev/null || true
           cp -r prompts deploy-package/ 2>/dev/null || true
           cp -r tests deploy-package/ 2>/dev/null || true
+          cp -r scripts deploy-package/ 2>/dev/null || true
           cp pytest.ini deploy-package/ 2>/dev/null || true
           # 创建部署脚本
           cat > deploy-package/deploy.sh << 'DEPLOY_SCRIPT'
@@ -324,7 +325,10 @@ jobs:
           cp env.example "$NEW_VERSION_DIR/" 2>/dev/null || true
           cp -r prompts "$NEW_VERSION_DIR/" 2>/dev/null || true
           cp -r tests "$NEW_VERSION_DIR/" 2>/dev/null || true
+          cp -r scripts "$NEW_VERSION_DIR/" 2>/dev/null || true
           cp pytest.ini "$NEW_VERSION_DIR/" 2>/dev/null || true
+          # 确保脚本有执行权限
+          chmod +x "$NEW_VERSION_DIR/scripts"/*.sh 2>/dev/null || true
           
           # 创建或使用共享虚拟环境
           echo "[2/6] 检查共享虚拟环境..."

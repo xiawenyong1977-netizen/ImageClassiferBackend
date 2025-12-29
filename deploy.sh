@@ -89,6 +89,14 @@ if [ -f "$LOCAL_DIR/pytest.ini" ]; then
     scp "$LOCAL_DIR/pytest.ini" "${SERVER}:${VERSION_DIR}/" 2>/dev/null || true
 fi
 
+# 同步 scripts 目录（包含回滚等运维脚本）
+if [ -d "$LOCAL_DIR/scripts" ]; then
+    echo "  同步 scripts/ 目录..."
+    scp -r "$LOCAL_DIR/scripts" "${SERVER}:${VERSION_DIR}/" 2>/dev/null || true
+    # 确保脚本有执行权限
+    ssh $SERVER "chmod +x ${VERSION_DIR}/scripts/*.sh 2>/dev/null || true"
+fi
+
 # tools 目录包含开发和运维工具，不需要部署到生产环境
 # 如需使用工具脚本，请手动通过 SSH 执行
 
@@ -127,14 +135,28 @@ ssh $SERVER "cd $REMOTE_DIR && \
 echo ""
 echo "[4/7] 检查系统依赖..."
 ssh $SERVER "
-    echo '检查系统依赖 libzbar0 (pyzbar 所需)...'
-    if ! dpkg -l | grep -q '^ii.*libzbar0'; then
-        echo '  libzbar0 未安装，正在安装...'
-        sudo apt-get update -qq
-        sudo apt-get install -y libzbar0
-        echo '  ✓ libzbar0 安装完成'
+    echo '检查系统依赖 zbar (pyzbar 所需)...'
+    if command -v dpkg >/dev/null 2>&1; then
+        # Debian/Ubuntu 系统
+        if ! dpkg -l | grep -q '^ii.*libzbar0'; then
+            echo '  libzbar0 未安装，正在安装...'
+            sudo apt-get update -qq
+            sudo apt-get install -y libzbar0
+            echo '  ✓ libzbar0 安装完成'
+        else
+            echo '  ✓ libzbar0 已安装'
+        fi
+    elif command -v rpm >/dev/null 2>&1; then
+        # CentOS/RHEL/Alibaba Cloud Linux 系统
+        if ! rpm -qa | grep -q '^zbar-libs'; then
+            echo '  zbar-libs 未安装，正在安装...'
+            sudo yum install -y zbar-libs
+            echo '  ✓ zbar-libs 安装完成'
+        else
+            echo '  ✓ zbar-libs 已安装'
+        fi
     else
-        echo '  ✓ libzbar0 已安装'
+        echo '  ⚠ 无法检测系统类型，跳过系统依赖检查'
     fi
 " || {
     echo "  警告: 系统依赖检查可能有问题"
