@@ -1,6 +1,0 @@
-
-# ===== 管理后台认证配置 =====
-JWT_SECRET_KEY=zywl-image-classifier-jwt-secret-key-20251011-production
-ADMIN_USERNAME=zywl
-ADMIN_PASSWORD_HASH=$2b$12$BPXOGPocp.qvdeJrgPzcB.HmfehnpDFLvVk0W9Qzd2sZRw5kKPPZK
-

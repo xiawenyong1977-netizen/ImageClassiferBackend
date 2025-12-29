@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     
     # ===== 本地推理配置 =====
     USE_LOCAL_INFERENCE: bool = Field(default=False, description="是否使用本地推理（开启后不调用大模型）")
-    LOCAL_INFERENCE_FALLBACK: bool = Field(default=True, description="大模型失败时是否降级到本地推理")
+    LOCAL_INFERENCE_FALLBACK: bool = Field(default=False, description="大模型失败时是否降级到本地推理")
     
     # ===== 应用配置 =====
     APP_HOST: str = Field(default="0.0.0.0", description="应用主机")
@@ -236,13 +236,13 @@ class Settings(BaseSettings):
     CREDITS_AMOUNTS_TEST: str = Field(default="1;5;10;50;100", description="测试额度套餐数量列表（用分号分隔）")
     
     # 正式价格配置（待启用）
-    MEMBER_PRICE_PROD: float = Field(default=29.90, description="会员正式价格(元)")
-    CREDITS_PRICE_PROD: float = Field(default=9.90, description="额度正式价格(元)")
+    MEMBER_PRICE_PROD: float = Field(default=9.90, description="会员正式价格(元)")
+    CREDITS_PRICE_PROD: float = Field(default=1.0, description="额度正式价格(元)")
     CREDITS_AMOUNT_PROD: int = Field(default=10, description="正式额度数量（默认值，已废弃，使用CREDITS_AMOUNTS_PROD）")
     CREDITS_AMOUNTS_PROD: str = Field(default="10;20;50;100", description="正式额度套餐数量列表（用分号分隔）")
     
     # 价格模式切换
-    USE_TEST_PRICE: bool = Field(default=True, description="是否使用测试价格")
+    USE_TEST_PRICE: bool = Field(default=False, description="是否使用测试价格")
     
     # ===== 微信配置 =====
     WECHAT_APPID: str = Field(default="", description="微信AppID")
