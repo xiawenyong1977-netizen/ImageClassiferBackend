@@ -125,7 +125,23 @@ ssh $SERVER "cd $REMOTE_DIR && \
 }
 
 echo ""
-echo "[4/6] 检查共享虚拟环境..."
+echo "[4/7] 检查系统依赖..."
+ssh $SERVER "
+    echo '检查系统依赖 libzbar0 (pyzbar 所需)...'
+    if ! dpkg -l | grep -q '^ii.*libzbar0'; then
+        echo '  libzbar0 未安装，正在安装...'
+        sudo apt-get update -qq
+        sudo apt-get install -y libzbar0
+        echo '  ✓ libzbar0 安装完成'
+    else
+        echo '  ✓ libzbar0 已安装'
+    fi
+" || {
+    echo "  警告: 系统依赖检查可能有问题"
+}
+
+echo ""
+echo "[5/7] 检查共享虚拟环境..."
 ssh $SERVER "cd $REMOTE_DIR && \
     SHARED_VENV=\"$REMOTE_DIR/venv\" && \
     if [ ! -d \"\$SHARED_VENV\" ]; then
@@ -159,13 +175,13 @@ ssh $SERVER "cd $REMOTE_DIR && \
 }
 
 echo ""
-echo "[5/6] 重启服务..."
+echo "[6/7] 重启服务..."
 ssh $SERVER "systemctl daemon-reload && systemctl restart image-classifier" || {
     echo "  警告: 服务重启失败，请手动检查"
 }
 
 echo ""
-echo "[6/6] 检查服务状态..."
+echo "[7/7] 检查服务状态..."
 ssh $SERVER "systemctl status image-classifier --no-pager | head -n 5"
 
 echo ""
@@ -173,7 +189,8 @@ echo "========================================"
 echo "部署完成！"
 echo "========================================"
 echo ""
-echo "查看服务日志: ssh $SERVER 'journalctl -u image-classifier -f'"
+echo "查看服务日志: ssh $SERVER 'tail -f /var/log/image-classifier/app.log'"
+echo "查看最近日志: ssh $SERVER 'tail -n 100 /var/log/image-classifier/app.log'"
 echo "查看服务状态: ssh $SERVER 'systemctl status image-classifier'"
 echo ""
 
