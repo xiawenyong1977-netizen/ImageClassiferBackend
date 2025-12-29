@@ -264,6 +264,11 @@ function Sync-Directory {
     # 全量模式：同步整个目录
     Write-Host "  同步 $Description (全量模式)..." -ForegroundColor Cyan
     $normalizedLocalPath = $LocalPath.Replace("\", "/")
+    
+    # 先确保远程目录的父目录存在（scp -r 需要目标目录的父目录存在）
+    Write-Host "    创建远程目录: $RemotePath" -ForegroundColor Gray
+    ssh $SERVER "mkdir -p `"$RemotePath`"" 2>&1 | Out-Null
+    
     $scpCmd = "scp -r `"$normalizedLocalPath`" ${SERVER}:${RemotePath}/"
     Write-Host "    执行命令: $scpCmd" -ForegroundColor Gray
     Write-Host "    本地路径: $normalizedLocalPath" -ForegroundColor Gray
@@ -381,6 +386,9 @@ Sync-Directory -LocalPath "$LOCAL_DIR\prompts" -RemotePath "${VERSION_DIR}/promp
 
 # 同步 tests 目录（用于服务器端测试）
 Sync-Directory -LocalPath "$LOCAL_DIR\tests" -RemotePath "${VERSION_DIR}/tests" -Description "tests/ 目录"
+
+# 同步 scripts 目录（用于服务器端脚本和检查工具）
+Sync-Directory -LocalPath "$LOCAL_DIR\scripts" -RemotePath "${VERSION_DIR}/scripts" -Description "scripts/ 目录"
 
 # 同步 pytest.ini（如果存在）
 Sync-File -LocalPath "$LOCAL_DIR\pytest.ini" -RemotePath "${VERSION_DIR}/pytest.ini" -Description "pytest.ini"
