@@ -102,6 +102,7 @@ async def setup_test_db():
     yield
     
     # 测试session结束后，关闭数据库连接池
+    # 必须在事件循环关闭之前关闭所有连接，避免 aiomysql 连接对象在 __del__ 中报错
     if db.pool:
         try:
             import asyncio
@@ -110,12 +111,29 @@ async def setup_test_db():
                 loop = asyncio.get_running_loop()
                 if loop.is_closed():
                     # 事件循环已关闭，直接设置pool为None
+                    # 注意：这可能导致连接对象在 __del__ 中报错，但这是测试环境的正常现象
                     db.pool = None
                 else:
                     # 事件循环还在运行，正常关闭连接池
-                    await db.disconnect()
+                    # 这会关闭所有连接，确保它们在事件循环关闭前被正确关闭
+                    pool = db.pool
+                    db.pool = None  # 先设置为None，避免并发问题
+                    
+                    try:
+                        # 关闭连接池（这会关闭所有连接）
+                        pool.close()
+                        # 等待所有连接关闭完成
+                        await pool.wait_closed()
+                    except Exception as e:
+                        # 如果关闭过程中出错，记录但不抛出异常
+                        # 这可能是由于事件循环正在关闭导致的
+                        import warnings
+                        error_msg = str(e).lower()
+                        if "event loop is closed" not in error_msg:
+                            warnings.warn(f"关闭数据库连接池时出现警告: {e}")
             except RuntimeError:
                 # 没有运行中的事件循环，直接设置pool为None
+                # 注意：这可能导致连接对象在 __del__ 中报错，但这是测试环境的正常现象
                 db.pool = None
         except Exception:
             # 忽略清理时的错误，确保pool被设置为None
@@ -156,6 +174,8 @@ async def db_connection():
         yield db
     finally:
         await db.disconnect()
+
+
 
 
 @pytest.fixture

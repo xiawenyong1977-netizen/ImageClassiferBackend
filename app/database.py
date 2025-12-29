@@ -62,7 +62,7 @@ class Database:
         self.pool = None  # 先设置为None，避免并发问题
         
         try:
-            # 关闭连接池，这会关闭所有连接
+            # 先关闭连接池，这会关闭所有连接
             pool.close()
             # 等待连接池关闭完成
             await pool.wait_closed()
@@ -77,7 +77,14 @@ class Database:
                 logger.warning(f"数据库连接池关闭时出现RuntimeError（已忽略）: {e}")
         except Exception as e:
             # 其他错误也记录警告，但不抛出异常
-            logger.warning(f"数据库连接池关闭时出现错误（已忽略）: {e}")
+            # 特别注意：在测试环境中，连接对象可能在事件循环关闭后才被垃圾回收，
+            # 这会导致 aiomysql 的 Connection.__del__ 方法抛出 RuntimeError，
+            # 这是正常的，不影响测试结果
+            error_msg = str(e).lower()
+            if "event loop is closed" in error_msg:
+                logger.debug("数据库连接池关闭时事件循环已关闭（测试环境正常现象）")
+            else:
+                logger.warning(f"数据库连接池关闭时出现错误（已忽略）: {e}")
     
     @asynccontextmanager
     async def get_connection(self):
