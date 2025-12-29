@@ -15,6 +15,8 @@ import uuid
 from app.database import db
 from app.auth import get_current_user
 from app.services.geocoding_client import geocoding_client
+from app.utils.id_generator import IDGenerator
+from app.utils.request_logger import RequestLogger
 from loguru import logger
 
 router = APIRouter(prefix="/api/v2/location", tags=["location-v2"])
@@ -549,7 +551,8 @@ async def record_api_call(api_provider: str, success: bool):
 
 @router.get("/stats", response_model=LocationStatsV2, summary="获取位置数据库统计信息（v2）")
 async def get_location_stats_v2(
-    current_user: str = Depends(get_current_user)
+    current_user: str = Depends(get_current_user),
+    request: Request = None
 ):
     """
     获取位置数据库的统计信息（v2版本，需要认证）
@@ -564,7 +567,21 @@ async def get_location_stats_v2(
     GET /api/v2/location/stats
     ```
     """
+    request_id = IDGenerator.generate_request_id("location_stats")
+    start_time = time.time()
+    ip_address = request.client.host if request else None
+    
     try:
+        # 记录请求开始
+        RequestLogger.log_request(
+            request_id=request_id,
+            endpoint="/api/v2/location/stats",
+            method="GET",
+            user_id=current_user,
+            ip_address=ip_address
+        )
+        
+        RequestLogger.log_step(request_id, "query_db_stats", "查询数据库统计", user_id=current_user)
         # 查询数据库统计
         query = """
             SELECT 
@@ -646,7 +663,7 @@ async def get_location_stats_v2(
                 "failed": row["failed"]
             }
         
-        return LocationStatsV2(
+        response = LocationStatsV2(
             total_cities=db_stats["total"] or 0,
             cities_with_chinese=mapping_stats["mappable_count"] or 0,
             mapping_table_size=mapping_size["total"] or 0,
@@ -655,8 +672,35 @@ async def get_location_stats_v2(
             data_source_distribution=data_source_distribution
         )
         
+        # 记录响应
+        response_time_ms = int((time.time() - start_time) * 1000)
+        RequestLogger.log_response(
+            request_id=request_id,
+            endpoint="/api/v2/location/stats",
+            status_code=200,
+            user_id=current_user,
+            response_time_ms=response_time_ms,
+            total_cities=db_stats["total"] or 0
+        )
+        
+        return response
+        
     except Exception as e:
-        logger.error(f"获取统计信息失败: {e}")
+        RequestLogger.log_error(
+            request_id,
+            e,
+            "/api/v2/location/stats",
+            current_user,
+            "query_failed"
+        )
+        response_time_ms = int((time.time() - start_time) * 1000)
+        RequestLogger.log_response(
+            request_id=request_id,
+            endpoint="/api/v2/location/stats",
+            status_code=500,
+            user_id=current_user,
+            response_time_ms=response_time_ms
+        )
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
 
 
@@ -715,22 +759,40 @@ async def batch_get_nearest_cities_v2(
     ```
     """
     start_time = time.time()
-    request_id = str(uuid.uuid4())
+    request_id = IDGenerator.generate_request_id("nearest_cities")
+    user_id = request_body.user_id
+    ip_address = request.client.host if request else None
     
     try:
+        # 记录请求开始
+        RequestLogger.log_request(
+            request_id=request_id,
+            endpoint="/api/v2/location/nearest-cities",
+            method="POST",
+            user_id=user_id,
+            ip_address=ip_address,
+            params={"coordinates_count": len(request_body.coordinates)}
+        )
+        
         # 批量查询所有坐标点
+        RequestLogger.log_step(request_id, "query_coordinates", f"开始批量查询 {len(request_body.coordinates)} 个坐标点", user_id=user_id)
         import asyncio
-        logger.info(f"开始批量查询 {len(request_body.coordinates)} 个坐标点")
         tasks = [query_single_coordinate(coord) for coord in request_body.coordinates]
         results = await asyncio.gather(*tasks)
-        logger.info(f"批量查询完成，成功: {sum(1 for r in results if r.success)}, 失败: {sum(1 for r in results if not r.success)}")
         
         # 统计结果
         success_count = sum(1 for r in results if r.success)
         failed_count = len(results) - success_count
+        RequestLogger.log_step(
+            request_id,
+            "query_complete",
+            f"批量查询完成: 成功={success_count}, 失败={failed_count}",
+            user_id=user_id
+        )
+        
         total_time_ms = int((time.time() - start_time) * 1000)
         
-        return BatchNearestCityResponse(
+        response = BatchNearestCityResponse(
             success=True,
             results=results,
             total_count=len(results),
@@ -740,7 +802,35 @@ async def batch_get_nearest_cities_v2(
             request_id=request_id
         )
         
+        # 记录响应
+        RequestLogger.log_response(
+            request_id=request_id,
+            endpoint="/api/v2/location/nearest-cities",
+            status_code=200,
+            user_id=user_id,
+            response_time_ms=total_time_ms,
+            total_count=len(results),
+            success_count=success_count,
+            failed_count=failed_count
+        )
+        
+        return response
+        
     except Exception as e:
-        logger.error(f"批量查询失败: {e}")
+        RequestLogger.log_error(
+            request_id,
+            e,
+            "/api/v2/location/nearest-cities",
+            user_id,
+            "query_failed"
+        )
+        response_time_ms = int((time.time() - start_time) * 1000)
+        RequestLogger.log_response(
+            request_id=request_id,
+            endpoint="/api/v2/location/nearest-cities",
+            status_code=500,
+            user_id=user_id,
+            response_time_ms=response_time_ms
+        )
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
 

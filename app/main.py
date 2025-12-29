@@ -14,6 +14,7 @@ import os
 from app.config import settings
 from app.database import db
 from app.api import classify, stats, health, location, auth, config, release, image_edit, user, payment
+from app.api import health_v2
 # 延迟导入local_classify（避免启动时导入ultralytics导致的问题）
 try:
     from app.api import local_classify
@@ -110,7 +111,8 @@ if local_classify is not None:
 app.include_router(config.router)  # 运行时配置
 app.include_router(release.router)  # 发行版本上传
 app.include_router(stats.router)
-app.include_router(health.router)
+app.include_router(health.router)  # 健康检查 v1
+app.include_router(health_v2.router)  # 健康检查 v2
 app.include_router(location.router)
 try:
     from app.api import location_v2

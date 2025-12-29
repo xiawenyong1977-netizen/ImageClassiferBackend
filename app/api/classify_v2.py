@@ -28,6 +28,7 @@ from app.services.user_photos_service import user_photos_service
 from app.utils.image_utils import ImageUtils
 from app.utils.hash_utils import HashUtils
 from app.utils.id_generator import IDGenerator
+from app.utils.request_logger import RequestLogger
 from app.config import settings
 from loguru import logger
 
@@ -357,20 +358,46 @@ async def batch_classify_v2(
         "user_id": "optional"
       }
     """
+    batch_request_id = IDGenerator.generate_request_id("batch_classify")
+    batch_start_time = time.time()
+    user_id = None
+    ip_address = request.client.host if request else None
+    
     try:
+        # 记录请求开始
+        RequestLogger.log_request(
+            request_id=batch_request_id,
+            endpoint="/api/v2/classify/batch",
+            method="POST",
+            user_id=None,  # 稍后获取
+            ip_address=ip_address,
+            params={"image_count": len(images)}
+        )
+        
         # 1. 参数验证
+        RequestLogger.log_step(batch_request_id, "validate_params", f"验证参数: 图片数量={len(images)}")
         max_images = 20
         if len(images) > max_images:
-            logger.warning(f"批量分类v2-图片数量超限: 上传={len(images)}, 最大={max_images}")
+            RequestLogger.log_error(
+                batch_request_id,
+                Exception(f"图片数量超限: {len(images)}"),
+                "/api/v2/classify/batch",
+                None,
+                "image_count_exceeded",
+                image_count=len(images),
+                max_images=max_images
+            )
             raise HTTPException(
                 status_code=400,
                 detail=f"一次最多上传{max_images}张图片，当前: {len(images)}"
             )
         
         # 2. 解析image_metadata
+        RequestLogger.log_step(batch_request_id, "parse_metadata", "解析图片元数据")
         try:
             request_obj = BatchClassifyV2Request.model_validate_json(image_metadata)
         except Exception as e:
+            RequestLogger.log_error(batch_request_id, e, "/api/v2/classify/batch", None, "metadata_parse_failed")
             raise HTTPException(status_code=400, detail=f"image_metadata格式错误: {e}")
         
         items = request_obj.items
@@ -378,6 +405,15 @@ async def batch_classify_v2(
         
         # 验证items数组
         if len(items) != len(images):
+            RequestLogger.log_error(
+                batch_request_id,
+                Exception(f"图片数量与元数据数量不匹配"),
+                "/api/v2/classify/batch",
+                None,
+                "items_count_mismatch",
+                image_count=len(images),
+                items_count=len(items)
+            )
             raise HTTPException(
                 status_code=400,
                 detail=f"图片数量({len(images)})与元数据数量({len(items)})不匹配"
@@ -385,15 +421,12 @@ async def batch_classify_v2(
         
         # 3. 处理prompt（如果未提供则使用默认prompt）
         classification_prompt = prompt or settings.CLASSIFICATION_PROMPT
+        RequestLogger.log_step(batch_request_id, "process_prompt", f"使用提示词: {'自定义' if prompt else '默认'}")
         
         # 4. 获取用户信息（优先使用请求体中的user_id，否则使用Header）
         # 注意：不使用客户端提供的openid（安全考虑），由user_photos_service从数据库查询
         user_id = request_obj.user_id or x_user_id
-        ip_address = request.client.host if request else None
-        
-        # 5. 生成批量请求ID
-        batch_request_id = IDGenerator.generate_request_id()
-        batch_start_time = time.time()
+        RequestLogger.log_step(batch_request_id, "get_user_info", f"获取用户信息: user_id={user_id}")
         
         # 6. 处理每张图片
         tasks = []
@@ -452,11 +485,22 @@ async def batch_classify_v2(
             tasks.append(task)
         
         # 7. 执行任务（并行处理）
+        RequestLogger.log_step(batch_request_id, "process_images", f"开始并行处理 {len(tasks)} 张图片", user_id=user_id)
         results = await asyncio.gather(*tasks, return_exceptions=True)
         # 处理异常
         processed_results = []
+        exception_count = 0
         for i, result in enumerate(results):
             if isinstance(result, Exception):
+                exception_count += 1
+                RequestLogger.log_error(
+                    batch_request_id,
+                    result,
+                    "/api/v2/classify/batch",
+                    user_id,
+                    "image_processing_exception",
+                    image_index=i
+                )
                 item_meta = items[i] if i < len(items) else None
                 processed_results.append(_create_classify_result(
                     index=i,
@@ -469,6 +513,9 @@ async def batch_classify_v2(
                 processed_results.append(result)
         results = processed_results
         
+        if exception_count > 0:
+            RequestLogger.log_step(batch_request_id, "process_images", f"处理完成，发现 {exception_count} 个异常", user_id=user_id)
+        
         # 8. 汇总统计
         # 注意：user_photos记录已在_classify_single_image函数中完成（分类成功时自动记录）
         total_count = len(images)
@@ -478,13 +525,15 @@ async def batch_classify_v2(
         llm_count = sum(1 for r in results if not r.get('error') and r.get('inference_method') == 'llm')
         total_time_ms = int((time.time() - batch_start_time) * 1000)
         
-        logger.info(
-            f"批量分类v2统计 [{batch_request_id}]: "
-            f"上传={total_count}, 成功={success_count}, 失败={failed_count}, "
-            f"缓存={cached_count}, LLM={llm_count}, 耗时={total_time_ms}ms"
+        RequestLogger.log_step(
+            batch_request_id,
+            "summary",
+            f"统计完成: 总数={total_count}, 成功={success_count}, 失败={failed_count}, 缓存={cached_count}, LLM={llm_count}",
+            user_id=user_id
         )
         
         # 10. 记录统一日志（统计用户分类图片张数）
+        RequestLogger.log_step(batch_request_id, "log_stats", "记录统计日志", user_id=user_id)
         try:
             await stats_service.log_unified_request(
                 request_id=batch_request_id,
@@ -498,14 +547,14 @@ async def batch_classify_v2(
                 local_count=0  # v2版本不使用本地推理
             )
         except Exception as e:
-            logger.error(f"批量分类v2-记录统一日志失败 [{batch_request_id}]: {e}")
+            RequestLogger.log_error(batch_request_id, e, "/api/v2/classify/batch", user_id, "stats_log_failed")
         
         # 11. 构造响应
         response_items = [
             BatchClassifyItemV2(**result) for result in results
         ]
         
-        return BatchClassifyResponseV2(
+        response = BatchClassifyResponseV2(
             error_type=InternalErrorType.SUCCESS,
             error=None,
             results=response_items,
@@ -520,14 +569,51 @@ async def batch_classify_v2(
             request_id=batch_request_id
         )
         
-    except HTTPException:
+        # 记录响应
+        RequestLogger.log_response(
+            request_id=batch_request_id,
+            endpoint="/api/v2/classify/batch",
+            status_code=200,
+            user_id=user_id,
+            response_time_ms=total_time_ms,
+            total_count=total_count,
+            success_count=success_count,
+            cached_count=cached_count,
+            llm_count=llm_count
+        )
+        
+        return response
+        
+    except HTTPException as e:
         # 参数验证错误等客户端错误，继续抛出
+        RequestLogger.log_error(
+            batch_request_id,
+            e,
+            "/api/v2/classify/batch",
+            user_id,
+            "http_exception",
+            status_code=e.status_code,
+            detail=e.detail
+        )
+        response_time_ms = int((time.time() - batch_start_time) * 1000)
+        RequestLogger.log_response(
+            request_id=batch_request_id,
+            endpoint="/api/v2/classify/batch",
+            status_code=e.status_code,
+            user_id=user_id,
+            response_time_ms=response_time_ms
+        )
         raise
     except Exception as e:
         # 内部服务异常（如数据库连接失败），返回error_type为具体错误类型
         error_type, error_msg = _classify_internal_error(e)
-        logger.error(f"批量分类v2-内部服务异常 [{error_type.value}]: {e}", exc_info=True)
-        batch_request_id = IDGenerator.generate_request_id()
+        RequestLogger.log_error(
+            batch_request_id,
+            e,
+            "/api/v2/classify/batch",
+            user_id,
+            error_type.value
+        )
         return BatchClassifyResponseV2(
             error_type=error_type,
             error=f"内部服务异常: {error_msg}",
@@ -557,28 +643,69 @@ async def batch_check_cache_v2(
     一次性检查多个图片哈希的缓存状态
     最多支持200个哈希
     """
+    request_id = IDGenerator.generate_request_id("batch_cache")
+    start_time = time.time()
+    user_id = None
+    ip_address = request.client.host if request else None
+    
     try:
+        # 记录请求开始
+        RequestLogger.log_request(
+            request_id=request_id,
+            endpoint="/api/v2/classify/batch-check-cache",
+            method="POST",
+            user_id=None,  # 稍后获取
+            ip_address=ip_address,
+            params={"items_count": len(request_body.items) if request_body.items else 0}
+        )
+        
         # 1. 参数验证
+        RequestLogger.log_step(request_id, "validate_params", f"验证参数: items数量={len(request_body.items) if request_body.items else 0}")
         if not request_body.items:
+            RequestLogger.log_error(
+                request_id,
+                Exception("items不能为空"),
+                "/api/v2/classify/batch-check-cache",
+                None,
+                "empty_items"
+            )
             raise HTTPException(status_code=400, detail="items不能为空")
         
         if len(request_body.items) > 200:
+            RequestLogger.log_error(
+                request_id,
+                Exception(f"items数量超限: {len(request_body.items)}"),
+                "/api/v2/classify/batch-check-cache",
+                None,
+                "items_count_exceeded",
+                items_count=len(request_body.items)
+            )
             raise HTTPException(status_code=400, detail="最多支持200个哈希")
         
         # 验证每个item都有image_hash
         for item in request_body.items:
             if not item.image_hash:
+                RequestLogger.log_error(
+                    request_id,
+                    Exception("item缺少image_hash"),
+                    "/api/v2/classify/batch-check-cache",
+                    None,
+                    "missing_image_hash",
+                    item_index=item.index
+                )
                 raise HTTPException(status_code=400, detail="每个item必须包含image_hash")
         
         # 2. 处理prompt
         prompt = request_body.prompt or settings.CLASSIFICATION_PROMPT
+        RequestLogger.log_step(request_id, "process_prompt", f"使用提示词: {'自定义' if request_body.prompt else '默认'}")
         
         # 3. 获取用户信息
         # 注意：不使用客户端提供的openid（安全考虑）
         user_id = x_user_id or request_body.user_id
-        ip_address = request.client.host if request else None
+        RequestLogger.log_step(request_id, "get_user_info", f"获取用户信息: user_id={user_id}")
         
         # 4. 批量查询缓存
+        RequestLogger.log_step(request_id, "check_cache", f"开始批量查询缓存: {len(request_body.items)} 个哈希", user_id=user_id)
         # 批量查询缓存的逻辑保留在这里，循环调用llm_service的单张图片缓存查询接口
         # 数据库连接池大小为10，最大溢出5，总共15个连接，限制并发为10个
         max_concurrent_cache_queries = 10
@@ -597,12 +724,22 @@ async def batch_check_cache_v2(
         
         # 5. 构造结果列表（缓存里存的是什么就返回什么，不做解析）
         results = []
+        exception_count = 0
         for i, item in enumerate(request_body.items):
             cached_result = cached_results_list[i] if i < len(cached_results_list) else None
             
             # 处理异常情况
             if isinstance(cached_result, Exception):
-                logger.warning(f"查询缓存异常 [{item.image_hash[:16]}...]: {cached_result}")
+                exception_count += 1
+                RequestLogger.log_error(
+                    request_id,
+                    cached_result,
+                    "/api/v2/classify/batch-check-cache",
+                    user_id,
+                    "cache_query_exception",
+                    image_hash=item.image_hash[:16] if item.image_hash else None,
+                    item_index=item.index
+                )
                 cached_result = None
             
             if cached_result:
@@ -629,14 +766,21 @@ async def batch_check_cache_v2(
                     cached=False
                 ))
         
+        if exception_count > 0:
+            RequestLogger.log_step(request_id, "check_cache", f"缓存查询完成，发现 {exception_count} 个异常", user_id=user_id)
+        
         # 6. 汇总统计
         cached_count = sum(1 for r in results if r['cached'])
         miss_count = len(results) - cached_count
-        
-        # 7. 生成请求ID
-        request_id = IDGenerator.generate_request_id()
+        RequestLogger.log_step(
+            request_id,
+            "summary",
+            f"统计完成: 总数={len(results)}, 命中={cached_count}, 未命中={miss_count}",
+            user_id=user_id
+        )
         
         # 8. 记录统一日志
+        RequestLogger.log_step(request_id, "log_stats", "记录统计日志", user_id=user_id)
         try:
             await stats_service.log_unified_request(
                 request_id=request_id,
@@ -650,12 +794,13 @@ async def batch_check_cache_v2(
                 local_count=0
             )
         except Exception as e:
-            logger.error(f"批量缓存查询v2-记录统一日志失败 [{request_id}]: {e}")
+            RequestLogger.log_error(request_id, e, "/api/v2/classify/batch-check-cache", user_id, "stats_log_failed")
         
         # 9. 构造响应
         cache_items = [CacheItemV2(**r) for r in results]
+        response_time_ms = int((time.time() - start_time) * 1000)
         
-        return BatchCheckCacheV2Response(
+        response = BatchCheckCacheV2Response(
             error_type=InternalErrorType.SUCCESS,
             error=None,
             results=cache_items,
@@ -667,13 +812,58 @@ async def batch_check_cache_v2(
             request_id=request_id
         )
         
-    except HTTPException:
+        # 记录响应
+        RequestLogger.log_response(
+            request_id=request_id,
+            endpoint="/api/v2/classify/batch-check-cache",
+            status_code=200,
+            user_id=user_id,
+            response_time_ms=response_time_ms,
+            total=len(results),
+            cached_count=cached_count,
+            miss_count=miss_count
+        )
+        
+        return response
+        
+    except HTTPException as e:
         # 参数验证错误等客户端错误，继续抛出
+        RequestLogger.log_error(
+            request_id,
+            e,
+            "/api/v2/classify/batch-check-cache",
+            user_id,
+            "http_exception",
+            status_code=e.status_code,
+            detail=e.detail
+        )
+        response_time_ms = int((time.time() - start_time) * 1000)
+        RequestLogger.log_response(
+            request_id=request_id,
+            endpoint="/api/v2/classify/batch-check-cache",
+            status_code=e.status_code,
+            user_id=user_id,
+            response_time_ms=response_time_ms
+        )
         raise
     except Exception as e:
         # 内部服务异常（如数据库连接失败），返回error_type为具体错误类型
         error_type, error_msg = _classify_internal_error(e)
-        logger.error(f"批量缓存查询v2-内部服务异常 [{error_type.value}]: {e}", exc_info=True)
+        RequestLogger.log_error(
+            request_id,
+            e,
+            "/api/v2/classify/batch-check-cache",
+            user_id,
+            error_type.value
+        )
+        response_time_ms = int((time.time() - start_time) * 1000)
+        RequestLogger.log_response(
+            request_id=request_id,
+            endpoint="/api/v2/classify/batch-check-cache",
+            status_code=500,
+            user_id=user_id,
+            response_time_ms=response_time_ms
+        )
         request_id = IDGenerator.generate_request_id()
         return BatchCheckCacheV2Response(
             error_type=error_type,

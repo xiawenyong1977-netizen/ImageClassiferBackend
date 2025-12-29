@@ -3,9 +3,10 @@ API请求和响应数据模型（v2版本）
 用于v2版本的分类接口
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Dict
 from enum import Enum
+from datetime import datetime
 
 
 class InternalErrorType(str, Enum):
@@ -156,4 +157,17 @@ class TaskStatusResponseV2(BaseModel):
     results: List[ImageEditResultItem] = Field(..., description="结果列表")
     created_at: str = Field(..., description="创建时间")
     updated_at: str = Field(..., description="更新时间")
+
+
+class HealthCheckResponseV2(BaseModel):
+    """健康检查响应 v2版本"""
+    status: str = Field(..., description="状态")
+    timestamp: datetime = Field(default_factory=datetime.now, description="服务器时间戳")
+    database: str = Field(..., description="数据库状态")
+    model_api: str = Field(..., description="模型API状态")
+    user_id: Optional[str] = Field(None, description="用户ID/设备ID")
+    device_type: Optional[str] = Field(None, description="设备类型")
+    client_timestamp: Optional[datetime] = Field(None, description="客户端提交的时间")
+    
+    model_config = ConfigDict(protected_namespaces=())
 
