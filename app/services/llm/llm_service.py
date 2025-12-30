@@ -182,15 +182,17 @@ class LLMService:
         image_bytes: bytes,
         prompt: Optional[str] = None,
         use_cache: bool = True,
+        image_hash: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
         调用大模型进行图片分类（带缓存和错误处理）
         
         Args:
-            image_bytes: 图片二进制数据
+            image_bytes: 图片二进制数据（可能是压缩后的）
             prompt: 提示词，None则使用配置的分类提示词
             use_cache: 是否使用缓存（默认True）
+            image_hash: 客户端提供的图片hash（基于原图计算），如果提供则使用，否则基于image_bytes计算
             **kwargs: 其他参数
             
         Returns:
@@ -212,8 +214,10 @@ class LLMService:
         # 判断是否使用默认prompt（默认prompt要求返回JSON格式）
         is_default_prompt = prompt == settings.CLASSIFICATION_PROMPT
         
-        # 计算image_hash
-        image_hash = HashUtils.calculate_sha256(image_bytes)
+        # 使用客户端提供的hash（基于原图），如果没有提供则基于压缩后的图片计算
+        # 注意：由于服务器收到的图片是压缩后的，应该使用客户端提供的原图hash来查询缓存
+        if image_hash is None:
+            image_hash = HashUtils.calculate_sha256(image_bytes)
         
         # 1. 如果启用缓存，先查缓存
         if use_cache:

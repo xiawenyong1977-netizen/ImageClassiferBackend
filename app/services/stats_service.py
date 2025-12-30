@@ -74,7 +74,7 @@ class StatsService:
                 llm_count = int(llm_count) if llm_count is not None else 0
                 local_count = int(local_count) if local_count is not None else 0
                 
-                logger.info(f"记录统一请求日志 [{request_id}]: type={request_type}, total={total_images}, cached={cached_count}, llm={llm_count}, local={local_count}")
+                # 不输出日志，由调用方的 log_stats 日志统一输出
                 
                 await cursor.execute(sql, (
                     request_id, request_type, ip_address, client_id, resolved_openid,

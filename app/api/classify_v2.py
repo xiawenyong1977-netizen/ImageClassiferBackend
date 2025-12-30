@@ -234,9 +234,11 @@ async def _classify_single_image(
     item_start_time = time.time()
     
     try:
-        # 安全考虑：始终使用服务端计算的hash，忽略客户端提供的hash（防止hash错误导致覆盖别人的记录）
-        # 即使客户端提供了hash，也重新计算以确保安全
-        image_hash = HashUtils.calculate_sha256(image_bytes)
+        # 使用客户端提供的hash（基于原图计算）
+        # 注意：服务器收到的图片是压缩后的，所以应该使用客户端提供的原图hash来查询缓存
+        # 如果客户端没有提供hash，则基于压缩后的图片计算（向后兼容）
+        if not image_hash:
+            image_hash = HashUtils.calculate_sha256(image_bytes)
         
         # 1. 先检测二维码（在调用LLM之前快速检测）
         has_qrcode = _detect_qrcode(image_bytes)
@@ -253,10 +255,12 @@ async def _classify_single_image(
             )
         
         # 2. 调用LLM（内部会处理缓存查询和响应解析）
+        # 传入客户端提供的hash（基于原图），用于查询缓存
         llm_result = await llm_service.classify_image(
             image_bytes=image_bytes,
             prompt=prompt,
-            use_cache=True  # llm_service内部会处理缓存
+            use_cache=True,  # llm_service内部会处理缓存
+            image_hash=image_hash  # 使用客户端提供的原图hash
         )
         
         processing_time = int((time.time() - item_start_time) * 1000)
@@ -283,8 +287,8 @@ async def _classify_single_image(
                     image_uri=image_uri
                 )
             except Exception as e:
-                # 记录失败不影响分类结果返回
-                logger.warning(f"记录user_photos失败 [{index}]: {e}")
+                # 记录失败不影响分类结果返回，只记录异常（汇总日志在batch_classify_v2中）
+                logger.warning(f"更新user_photos异常 [{index}]: {e}")
         
         # 4. 获取解析后的结果（llm_service已自动解析）
         # 如果使用默认prompt，llm_service会返回parsed_result
@@ -375,7 +379,6 @@ async def batch_classify_v2(
         )
         
         # 1. 参数验证
-        RequestLogger.log_step(batch_request_id, "validate_params", f"验证参数: 图片数量={len(images)}")
         max_images = 20
         if len(images) > max_images:
             RequestLogger.log_error(
@@ -393,12 +396,34 @@ async def batch_classify_v2(
             )
         
         # 2. 解析image_metadata
-        RequestLogger.log_step(batch_request_id, "parse_metadata", "解析图片元数据")
         try:
             request_obj = BatchClassifyV2Request.model_validate_json(image_metadata)
         except Exception as e:
-            RequestLogger.log_error(batch_request_id, e, "/api/v2/classify/batch", None, "metadata_parse_failed")
-            raise HTTPException(status_code=400, detail=f"image_metadata格式错误: {e}")
+            # 记录详细的错误信息，包括原始JSON内容（截取前500字符）
+            error_detail = str(e)
+            json_preview = image_metadata[:500] if len(image_metadata) > 500 else image_metadata
+            RequestLogger.log_error(
+                batch_request_id, 
+                e, 
+                "/api/v2/classify/batch", 
+                None, 
+                "metadata_parse_failed",
+                error_detail=error_detail,
+                json_preview=json_preview
+            )
+            # 如果是Pydantic验证错误，提供更友好的错误信息
+            if hasattr(e, 'errors'):
+                # Pydantic ValidationError
+                error_messages = []
+                for err in e.errors():
+                    field_path = ' -> '.join(str(loc) for loc in err['loc'])
+                    error_messages.append(f"{field_path}: {err['msg']}")
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"image_metadata格式错误: {'; '.join(error_messages)}"
+                )
+            else:
+                raise HTTPException(status_code=400, detail=f"image_metadata格式错误: {error_detail}")
         
         items = request_obj.items
         prompt = request_obj.prompt
@@ -421,12 +446,18 @@ async def batch_classify_v2(
         
         # 3. 处理prompt（如果未提供则使用默认prompt）
         classification_prompt = prompt or settings.CLASSIFICATION_PROMPT
-        RequestLogger.log_step(batch_request_id, "process_prompt", f"使用提示词: {'自定义' if prompt else '默认'}")
         
         # 4. 获取用户信息（优先使用请求体中的user_id，否则使用Header）
         # 注意：不使用客户端提供的openid（安全考虑），由user_photos_service从数据库查询
         user_id = request_obj.user_id or x_user_id
-        RequestLogger.log_step(batch_request_id, "get_user_info", f"获取用户信息: user_id={user_id}")
+        
+        # 合并日志：参数验证、元数据解析、prompt处理、用户信息获取、开始处理
+        RequestLogger.log_step(
+            batch_request_id,
+            "batch_classify_init",
+            f"批量分类初始化: 图片数量={len(images)}, 提示词={'自定义' if prompt else '默认'}, 开始并行处理 {len(items)} 张图片",
+            user_id=user_id
+        )
         
         # 6. 处理每张图片
         tasks = []
@@ -465,8 +496,10 @@ async def batch_classify_v2(
             # 获取对应的元数据
             item_meta = items[index]
             
-            # 安全考虑：始终使用服务端计算的hash，忽略客户端提供的hash（防止hash错误导致覆盖别人的记录）
-            image_hash = HashUtils.calculate_sha256(image_bytes)
+            # 使用客户端提供的hash（基于原图计算）
+            # 注意：服务器收到的图片是压缩后的，所以应该使用客户端提供的原图hash来查询缓存
+            # 如果客户端没有提供hash，则基于压缩后的图片计算（向后兼容）
+            image_hash = item_meta.image_hash if item_meta.image_hash else HashUtils.calculate_sha256(image_bytes)
             
             image_uri = item_meta.image_uri
             
@@ -485,7 +518,7 @@ async def batch_classify_v2(
             tasks.append(task)
         
         # 7. 执行任务（并行处理）
-        RequestLogger.log_step(batch_request_id, "process_images", f"开始并行处理 {len(tasks)} 张图片", user_id=user_id)
+        # 日志已在初始化阶段输出，这里不再重复
         results = await asyncio.gather(*tasks, return_exceptions=True)
         # 处理异常
         processed_results = []
@@ -660,7 +693,7 @@ async def batch_check_cache_v2(
         )
         
         # 1. 参数验证
-        RequestLogger.log_step(request_id, "validate_params", f"验证参数: items数量={len(request_body.items) if request_body.items else 0}")
+        items_count = len(request_body.items) if request_body.items else 0
         if not request_body.items:
             RequestLogger.log_error(
                 request_id,
@@ -697,15 +730,18 @@ async def batch_check_cache_v2(
         
         # 2. 处理prompt
         prompt = request_body.prompt or settings.CLASSIFICATION_PROMPT
-        RequestLogger.log_step(request_id, "process_prompt", f"使用提示词: {'自定义' if request_body.prompt else '默认'}")
         
         # 3. 获取用户信息
         # 注意：不使用客户端提供的openid（安全考虑）
         user_id = x_user_id or request_body.user_id
-        RequestLogger.log_step(request_id, "get_user_info", f"获取用户信息: user_id={user_id}")
         
-        # 4. 批量查询缓存
-        RequestLogger.log_step(request_id, "check_cache", f"开始批量查询缓存: {len(request_body.items)} 个哈希", user_id=user_id)
+        # 合并日志：参数验证、prompt处理、用户信息获取、缓存查询开始
+        RequestLogger.log_step(
+            request_id, 
+            "batch_cache_init", 
+            f"批量缓存查询初始化: items数量={items_count}, 提示词={'自定义' if request_body.prompt else '默认'}, 开始查询 {items_count} 个哈希",
+            user_id=user_id
+        )
         # 批量查询缓存的逻辑保留在这里，循环调用llm_service的单张图片缓存查询接口
         # 数据库连接池大小为10，最大溢出5，总共15个连接，限制并发为10个
         max_concurrent_cache_queries = 10
@@ -714,6 +750,9 @@ async def batch_check_cache_v2(
         async def check_cache_with_limit(item: ImageMetadataItem):
             """带并发限制的缓存查询"""
             async with semaphore:
+                # 注意：这里使用客户端提供的 image_hash
+                # 如果客户端 hash 不正确，会导致缓存查询失败
+                # 而 batch 接口使用服务端计算的 hash，所以可能命中缓存
                 return await llm_service.check_cache(prompt=prompt, image_hash=item.image_hash)
         
         cache_tasks = [
@@ -722,9 +761,11 @@ async def batch_check_cache_v2(
         
         cached_results_list = await asyncio.gather(*cache_tasks, return_exceptions=True)
         
-        # 5. 构造结果列表（缓存里存的是什么就返回什么，不做解析）
+        # 5. 构造结果列表并批量更新 user_photos（缓存命中时）
         results = []
         exception_count = 0
+        user_photos_tasks = []  # 收集需要更新 user_photos 的任务
+        
         for i, item in enumerate(request_body.items):
             cached_result = cached_results_list[i] if i < len(cached_results_list) else None
             
@@ -746,6 +787,22 @@ async def batch_check_cache_v2(
                 # check_cache已经根据service_type做了解析
                 cached_content = cached_result.get('content')
                 parsed_result = cached_result.get('parsed_result', {})
+                
+                # 缓存命中时，如果 user_id 存在，收集更新 user_photos 的任务（批量处理）
+                # 如果记录不存在，插入新记录（first_seen_at 会自动设置）
+                # 如果记录存在，更新 classify_count 和 last_seen_at（first_seen_at 保持不变）
+                if user_id and item.image_hash:
+                    user_photos_tasks.append(
+                        user_photos_service.upsert_user_photo(
+                            user_id=user_id,
+                            openid=None,  # 不使用客户端提供的openid，由service内部从数据库查询
+                            image_hash=item.image_hash,
+                            image_uri=item.image_uri
+                        )
+                    )
+                    logger.debug(f"收集user_photos更新任务 [{i}]: user_id={user_id}, image_hash={item.image_hash[:16] if item.image_hash else 'None'}...")
+                else:
+                    logger.debug(f"跳过user_photos更新任务 [{i}]: user_id={user_id or 'None'}, image_hash={item.image_hash[:16] if item.image_hash else 'None'}...")
                 
                 results.append(_create_cache_item(
                     index=item.index,
@@ -769,15 +826,43 @@ async def batch_check_cache_v2(
         if exception_count > 0:
             RequestLogger.log_step(request_id, "check_cache", f"缓存查询完成，发现 {exception_count} 个异常", user_id=user_id)
         
-        # 6. 汇总统计
+        # 6. 汇总统计（先统计，再输出日志）
         cached_count = sum(1 for r in results if r['cached'])
         miss_count = len(results) - cached_count
+        
+        # 输出关键信息：缓存命中数量（在更新user_photos之前）
+        logger.info(f"缓存查询完成: 总数={len(results)}, 命中={cached_count}, 未命中={miss_count}")
         RequestLogger.log_step(
             request_id,
             "summary",
             f"统计完成: 总数={len(results)}, 命中={cached_count}, 未命中={miss_count}",
             user_id=user_id
         )
+        
+        # 7. 批量更新 user_photos（针对缓存命中的记录，并发执行，失败不影响结果返回）
+        if user_photos_tasks:
+            try:
+                logger.info(f"开始批量更新 user_photos: {len(user_photos_tasks)} 条记录（缓存命中）")
+                results_list = await asyncio.gather(*user_photos_tasks, return_exceptions=True)
+                
+                # 检查每个任务的结果
+                success_count = 0
+                fail_count = 0
+                for idx, result in enumerate(results_list):
+                    if isinstance(result, Exception):
+                        fail_count += 1
+                        logger.warning(f"user_photos更新任务 [{idx}] 失败: {result}")
+                    elif result is False:
+                        fail_count += 1
+                        logger.warning(f"user_photos更新任务 [{idx}] 返回False")
+                    else:
+                        success_count += 1
+                
+                logger.info(f"批量更新 user_photos 完成: 成功={success_count}, 失败={fail_count}, 总数={len(user_photos_tasks)}")
+            except Exception as e:
+                logger.warning(f"批量更新 user_photos 异常: {e}")
+        else:
+            logger.debug(f"没有user_photos更新任务（user_photos_tasks为空）")
         
         # 8. 记录统一日志
         RequestLogger.log_step(request_id, "log_stats", "记录统计日志", user_id=user_id)

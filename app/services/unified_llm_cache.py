@@ -85,35 +85,27 @@ class UnifiedLLMCacheService:
             未找到返回 None
         """
         try:
-            logger.info(f"[unified_llm_cache] get_cached_result方法开始: prompt长度={len(prompt)}, image_hash={image_hash[:16]}...")
             prompt_hash = self._generate_prompt_hash(prompt)
-            logger.info(f"[unified_llm_cache] prompt_hash计算完成: {prompt_hash[:16]}...")
-            logger.info(f"[unified_llm_cache] 开始查询缓存: prompt_hash={prompt_hash[:16]}..., image_hash={image_hash[:16]}...")
             
-            logger.info(f"[unified_llm_cache] 准备获取数据库连接...")
             async with db.get_cursor() as cursor:
-                logger.info(f"[unified_llm_cache] 已获取数据库连接，开始执行查询")
                 sql = """
                 SELECT model_results, hit_count
                 FROM llm_inference_cache_v2
                 WHERE prompt_hash = %s AND image_hash = %s
                 """
                 await cursor.execute(sql, (prompt_hash, image_hash))
-                logger.info(f"[unified_llm_cache] 查询执行完成，开始获取结果")
                 row = await cursor.fetchone()
-                logger.info(f"[unified_llm_cache] 结果获取完成: found={row is not None}")
                 
+                # 不记录日志，由调用方的汇总日志统一输出
                 if not row:
-                    logger.debug(f"缓存未命中: prompt_hash={prompt_hash[:16]}..., image_hash={image_hash[:16]}...")
                     return None
                 
                 # 解析JSON
                 model_results = json.loads(row['model_results'])
                 
                 # 更新命中次数（复用当前游标，避免嵌套连接）
-                logger.info(f"[unified_llm_cache] 准备更新命中次数...")
+                # 不记录日志，减少日志噪音
                 await self._increment_hit_count(prompt_hash, image_hash, cursor=cursor)
-                logger.info(f"[unified_llm_cache] 命中次数更新完成")
                 
                 # 如果指定了模型Key，只返回该模型的结果
                 if model_key:
@@ -280,7 +272,7 @@ class UnifiedLLMCacheService:
                         json.dumps(initial_model_results, ensure_ascii=False)
                     ))
                 
-                logger.info(f"缓存已保存: prompt_hash={prompt_hash[:16]}..., image_hash={image_hash[:16]}..., model={model_key}")
+                # 成功时不记录日志，减少日志噪音
                 return True
                 
         except Exception as e:
@@ -442,7 +434,7 @@ class UnifiedLLMCacheService:
         try:
             if cursor is not None:
                 # 复用已有的游标（避免嵌套连接）
-                logger.info(f"[unified_llm_cache] 使用已有游标更新命中次数...")
+                # 不记录日志，减少日志噪音
                 sql = """
                 UPDATE llm_inference_cache_v2
                 SET 
@@ -451,7 +443,6 @@ class UnifiedLLMCacheService:
                 WHERE prompt_hash = %s AND image_hash = %s
                 """
                 await cursor.execute(sql, (prompt_hash, image_hash))
-                logger.info(f"[unified_llm_cache] 使用已有游标更新命中次数完成")
                 return True
             else:
                 # 创建新的连接
@@ -465,7 +456,7 @@ class UnifiedLLMCacheService:
                     WHERE prompt_hash = %s AND image_hash = %s
                     """
                     await new_cursor.execute(sql, (prompt_hash, image_hash))
-                    logger.info(f"[unified_llm_cache] 使用新连接更新命中次数完成")
+                    # 不记录日志，减少日志噪音
                     return True
         except Exception as e:
             logger.error(f"更新命中次数失败: {e}")

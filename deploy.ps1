@@ -264,17 +264,21 @@ function Sync-Directory {
     # 全量模式：同步整个目录
     Write-Host "  同步 $Description (全量模式)..." -ForegroundColor Cyan
     $normalizedLocalPath = $LocalPath.Replace("\", "/")
+    $remoteParentPath = Split-Path $RemotePath -Parent
     
-    # 先确保远程目录的父目录存在（scp -r 需要目标目录的父目录存在）
-    Write-Host "    创建远程目录: $RemotePath" -ForegroundColor Gray
-    ssh $SERVER "mkdir -p `"$RemotePath`"" 2>&1 | Out-Null
+    # 先确保远程父目录存在
+    Write-Host "    创建远程目录: $remoteParentPath" -ForegroundColor Gray
+    ssh $SERVER "mkdir -p `"$remoteParentPath`"" 2>&1 | Out-Null
     
-    $scpCmd = "scp -r `"$normalizedLocalPath`" ${SERVER}:${RemotePath}/"
+    # 使用 scp -r，目标目录设为父目录，这样 scp 会在父目录下创建同名目录，不会嵌套
+    # 例如：scp -r app root@web:/opt/ICBackend/versions/debug/ 
+    # 结果：/opt/ICBackend/versions/debug/app/（正确）
+    $scpCmd = "scp -r `"$normalizedLocalPath`" ${SERVER}:${remoteParentPath}/"
     Write-Host "    执行命令: $scpCmd" -ForegroundColor Gray
     Write-Host "    本地路径: $normalizedLocalPath" -ForegroundColor Gray
-    Write-Host "    远程路径: ${SERVER}:${RemotePath}/" -ForegroundColor Gray
+    Write-Host "    远程路径: ${SERVER}:${remoteParentPath}/" -ForegroundColor Gray
     
-    $scpOutput = scp -r "$normalizedLocalPath" "${SERVER}:${RemotePath}/" 2>&1
+    $scpOutput = scp -r "$normalizedLocalPath" "${SERVER}:${remoteParentPath}/" 2>&1
     $scpExitCode = $LASTEXITCODE
     
     if ($scpOutput) {

@@ -58,21 +58,17 @@ async def health_check_v2(
         )
         
         # 检查数据库
-        RequestLogger.log_step(request_id, "check_database", "开始检查数据库连接", user_id=user_id)
         db_status = "unknown"
         try:
             async with db.get_cursor() as cursor:
                 await cursor.execute("SELECT 1")
                 db_status = "connected"
-            RequestLogger.log_step(request_id, "check_database", f"数据库连接正常: {db_status}", user_id=user_id)
         except Exception as e:
             RequestLogger.log_error(request_id, e, "/api/v2/health", user_id, "database_check_failed")
             db_status = "disconnected"
         
         # 检查模型API（简单检查配置）
-        RequestLogger.log_step(request_id, "check_model_api", "检查模型API配置", user_id=user_id)
         model_status = "available" if settings.LLM_API_KEY else "not_configured"
-        RequestLogger.log_step(request_id, "check_model_api", f"模型API状态: {model_status}", user_id=user_id)
         
         # 确定整体状态
         # 在测试环境中，只要数据库连接正常就认为健康
@@ -83,17 +79,25 @@ async def health_check_v2(
         else:
             status = "healthy" if db_status == "connected" and model_status == "available" else "unhealthy"
         
-        RequestLogger.log_step(request_id, "determine_status", f"整体状态: {status}", user_id=user_id)
-        
         # 解析客户端时间戳
         parsed_client_timestamp = None
+        timestamp_parse_status = "not_provided"
         if client_timestamp:
             try:
                 # 支持 ISO 8601 格式，包括带 Z 的 UTC 时间
                 parsed_client_timestamp = datetime.fromisoformat(client_timestamp.replace('Z', '+00:00'))
-                RequestLogger.log_step(request_id, "parse_timestamp", f"客户端时间戳解析成功: {parsed_client_timestamp}", user_id=user_id)
+                timestamp_parse_status = f"parsed: {parsed_client_timestamp}"
             except (ValueError, AttributeError) as e:
                 RequestLogger.log_error(request_id, e, "/api/v2/health", user_id, "timestamp_parse_failed", client_timestamp=client_timestamp)
+                timestamp_parse_status = "parse_failed"
+        
+        # 合并所有检查结果到一条日志
+        RequestLogger.log_step(
+            request_id, 
+            "health_check", 
+            f"健康检查完成: 状态={status}, 数据库={db_status}, 模型API={model_status}, 时间戳={timestamp_parse_status}", 
+            user_id=user_id
+        )
         
         response = HealthCheckResponseV2(
             status=status,
