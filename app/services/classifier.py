@@ -379,7 +379,7 @@ class ClassifierService:
                 confidence=model_result['confidence'],
                 description=model_result.get('description'),
                 background_color=model_result.get('background_color'),
-                model_used=f"{settings.LLM_MODEL}_{inference_method}"
+                model_used=f"{model_client.model}_{inference_method}"
             )
             logger.info(f"分类结果已缓存: {model_result['category']}")
         elif inference_method in ["local", "local_fallback", "qrcode_detection"]:

@@ -27,10 +27,19 @@ from app.services.credit_service import credit_service
 from app.services.async_task_service import async_task_service
 from app.services.wechat_binding_service import wechat_binding_service
 from app.services.credits_usage_service import credits_usage_service
+from app.services.unified_llm_cache import unified_llm_cache
+from app.utils.hash_utils import HashUtils
 from app.utils.image_utils import ImageUtils
 from app.utils.id_generator import IDGenerator
 from app.utils.request_logger import RequestLogger
 from loguru import logger
+
+# 七牛云服务（可选，如果未安装qiniu包则跳过）
+try:
+    from app.services.qiniu_service import qiniu_service
+except ImportError as e:
+    logger.warning(f"七牛云服务导入失败，图片上传功能将不可用: {e}")
+    qiniu_service = None
 
 router = APIRouter(prefix="/api/v2/image-edit", tags=["image-edit-v2"])
 
@@ -41,7 +50,8 @@ async def _submit_task_async_v2(
     images: List[Dict],
     prompt: str,
     user_id: Optional[str] = None,
-    openid: Optional[str] = None
+    openid: Optional[str] = None,
+    request_id: Optional[str] = None
 ) -> str:
     """
     提交编辑任务（v2版本，使用 llm_service 和 unified_llm_cache）
@@ -51,42 +61,74 @@ async def _submit_task_async_v2(
     2. 缓存由 llm_service 自动处理（使用 unified_llm_cache）
     3. 任务处理过程中会内部批量查询缓存（与分类API不同，图像编辑不提供独立的批量查询缓存接口）
     """
+    total_images = len(images)
+    
+    # 记录请求信息（request_id 在调用时已存在）
+    RequestLogger.log_step(
+        request_id, 
+        "submit_task_start", 
+        f"开始提交编辑任务: 图片数={total_images}, prompt={'已提供' if prompt else '未提供'}, user_id={user_id}",
+        user_id=user_id
+    )
+    
     # 参数校验（prompt已在API层校验，这里只做防御性检查）
     if not prompt:
-        raise ValueError("prompt参数缺失")
+        error_msg = "prompt参数缺失"
+        RequestLogger.log_error(request_id, ValueError(error_msg), "_submit_task_async_v2", user_id, "missing_prompt")
+        raise ValueError(error_msg)
+    
+    RequestLogger.log_step(request_id, "validate_params", "参数校验通过", user_id=user_id)
     
     # 生成任务ID
     task_id = IDGenerator.generate_request_id("task")
-    total_images = len(images)
+    RequestLogger.log_step(request_id, "generate_task_id", f"生成任务ID: {task_id}", user_id=user_id)
     
     # 保存任务到数据库（使用通用异步任务服务）
-    await async_task_service.create_task(
-        task_id=task_id,
-        task_type='image_edit',
-        total_items=total_images,
-        task_params={'prompt': prompt},
-        user_id=user_id,
-        openid=openid
-    )
+    try:
+        await async_task_service.create_task(
+            task_id=task_id,
+            task_type='image_edit',
+            total_items=total_images,
+            task_params={'prompt': prompt},
+            user_id=user_id,
+            openid=openid
+        )
+        RequestLogger.log_step(request_id, "save_task_to_db", f"任务已保存到数据库: task_id={task_id}", user_id=user_id)
+    except Exception as e:
+        RequestLogger.log_error(request_id, e, "_submit_task_async_v2", user_id, "save_task_failed")
+        raise
     
-    logger.info(f"任务已创建(v2): {task_id}, 图片数: {total_images}")
+    # 记录响应信息（任务创建成功）
+    RequestLogger.log_step(
+        request_id, 
+        "task_created", 
+        f"任务创建成功(v2): task_id={task_id}, 图片数={total_images}, 已启动后台处理",
+        user_id=user_id
+    )
     
     # 异步处理任务（不阻塞）
     # 包装一个带超时的任务，避免后台任务无限期卡住
     async def _process_with_timeout():
         """带超时的后台任务包装器"""
-        logger.info(f"[后台任务] _process_with_timeout开始: task_id={task_id}")
+        # 动态计算超时时间：基础30秒 + 每张图片20秒（考虑网络延迟和重试）
+        # 最多支持9张图片，最大超时时间 = 30 + 9*20 = 210秒（3.5分钟）
+        base_timeout = 30.0  # 基础超时时间（秒）
+        per_image_timeout = 20.0  # 每张图片的超时时间（秒）
+        dynamic_timeout = base_timeout + (total_images * per_image_timeout)
+        max_timeout = 300.0  # 最大超时时间（5分钟），防止异常情况
+        timeout = min(dynamic_timeout, max_timeout)
+        
+        logger.info(f"[后台任务] _process_with_timeout开始: task_id={task_id}, 图片数={total_images}, 超时时间={timeout:.1f}秒")
         try:
-            # 设置最大超时时间（60秒），如果超时就记录错误并返回
             import asyncio
-            logger.info(f"[后台任务] 准备调用_process_task_async_v2: task_id={task_id}")
+            logger.info(f"[后台任务] 准备调用_process_task_async_v2: task_id={task_id}, 超时时间={timeout:.1f}秒")
             await asyncio.wait_for(
-                _process_task_async_v2(task_id, images, prompt, openid),
-                timeout=60.0  # 60秒超时
+                _process_task_async_v2(task_id, images, prompt, openid, request_id),
+                timeout=timeout
             )
             logger.info(f"[后台任务] _process_task_async_v2完成: task_id={task_id}")
         except asyncio.TimeoutError:
-            logger.error(f"后台任务超时(v2): task_id={task_id}, 已超过60秒")
+            logger.error(f"后台任务超时(v2): task_id={task_id}, 图片数={total_images}, 已超过{timeout:.1f}秒")
             # 更新任务状态为失败
             try:
                 await async_task_service.update_status(task_id, TaskStatus.FAILED)
@@ -106,7 +148,8 @@ async def _process_task_async_v2(
     task_id: str,
     images: List[Dict],
     prompt: str,
-    openid: Optional[str] = None
+    openid: Optional[str] = None,
+    request_id: Optional[str] = None
 ):
     """
     异步处理任务（v2版本，使用 llm_service）
@@ -142,6 +185,48 @@ async def _process_task_async_v2(
                     result_url = llm_result.get('result_url')
                     from_cache = llm_result.get('from_cache', False)
                     
+                    # 🔥 v2版本：下载图片并上传到七牛云CDN（生成永久URL）
+                    # 如果七牛云服务未启用，则使用原始URL（24小时有效）
+                    permanent_url = result_url
+                    if result_url and not from_cache and qiniu_service is not None:
+                        # 只有非缓存结果才需要上传（缓存的结果已经是永久URL）
+                        try:
+                            cdn_url = await qiniu_service.upload_image_from_url(
+                                image_url=result_url,
+                                key_prefix="image-edit",
+                                filename=None
+                            )
+                            if cdn_url:
+                                permanent_url = cdn_url
+                                logger.info(f"✅ 图片已上传到七牛云CDN: {cdn_url}")
+                                
+                                # 🔥 更新缓存中的URL为永久URL
+                                try:
+                                    image_hash = HashUtils.calculate_sha256(image_data['bytes'])
+                                    # 构建完整的prompt（包含edit_type，如果有的话）
+                                    full_prompt = prompt  # llm_service内部已经处理了edit_type
+                                    model_key = f"{llm_service.provider}:{llm_service.model}"
+                                    
+                                    await unified_llm_cache.save_result(
+                                        prompt=full_prompt,
+                                        image_hash=image_hash,
+                                        provider=llm_service.provider,
+                                        model_id=llm_service.model,
+                                        result=cdn_url,  # 保存永久URL
+                                        service_type="image_edit",
+                                        edit_type=None,  # edit_type已包含在prompt中
+                                        is_default_prompt=None
+                                    )
+                                    logger.info(f"✅ 缓存已更新为永久URL: {cdn_url}")
+                                except Exception as cache_error:
+                                    logger.warning(f"⚠️ 更新缓存失败: {cache_error}")
+                                    # 缓存更新失败不影响任务结果
+                            else:
+                                logger.warning(f"⚠️ 七牛云上传失败，使用原始URL: {result_url[:50]}...")
+                        except Exception as e:
+                            logger.error(f"❌ 上传图片到七牛云异常: {e}", exc_info=True)
+                            # 上传失败时仍使用原始URL，不阻塞任务
+                    
                     # 统计缓存命中数
                     if from_cache:
                         cache_hit_count += 1
@@ -152,7 +237,7 @@ async def _process_task_async_v2(
                         'index': index,
                         'image_uri': image_data.get('image_uri'),
                         'status': 'completed',
-                        'result_url': result_url,
+                        'result_url': permanent_url,  # 使用永久URL（七牛云CDN或原始URL）
                         'from_cache': from_cache
                     }
                 else:
@@ -422,7 +507,7 @@ async def batch_edit_v2(
         # 7. 提交异步任务（使用 v2 版本的处理逻辑）
         RequestLogger.log_step(request_id, "submit_task", "提交异步任务", user_id=user_id)
         task_id = await _submit_task_async_v2(
-            image_data_list, prompt, user_id, openid
+            image_data_list, prompt, user_id, openid, request_id
         )
         RequestLogger.log_step(request_id, "submit_task", f"任务提交成功: task_id={task_id}", user_id=user_id)
         

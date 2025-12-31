@@ -35,14 +35,14 @@ class LLMProvider(BaseLLMService):
         根据任务类型分发到具体的实现方法
         """
         if task_type == "classification":
-            return await self._call_classification(image_bytes, prompt)
+            return await self._call_classification(image_bytes, prompt, **kwargs)
         elif task_type == "image_edit":
             return await self._call_image_edit(image_bytes, prompt, **kwargs)
         else:
             raise ValueError(f"不支持的任务类型: {task_type}")
     
     @abstractmethod
-    async def _call_classification(self, image_bytes: bytes, prompt: str) -> Dict[str, Any]:
+    async def _call_classification(self, image_bytes: bytes, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> Dict[str, Any]:
         """分类任务实现"""
         pass
     
@@ -69,7 +69,7 @@ class AliyunProvider(LLMProvider):
     - 详见ERROR_CODES.md文档
     """
     
-    async def _call_classification(self, image_bytes: bytes, prompt: str) -> Dict[str, Any]:
+    async def _call_classification(self, image_bytes: bytes, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> Dict[str, Any]:
         """使用阿里云通义千问VL进行分类"""
         try:
             import dashscope
@@ -226,12 +226,46 @@ class AliyunProvider(LLMProvider):
                 if response.status_code == 200:
                     result = response.json()
                     if 'output' in result and 'choices' in result['output']:
-                        result_url = result['output']['choices'][0]['message']['content'][0]['image']
+                        choices = result['output']['choices']
+                        if len(choices) == 0:
+                            raise LLMError(
+                                message="API返回的choices数组为空",
+                                error_type=LLMErrorType.FORMAT_ERROR,
+                                status_code=200
+                            )
+                        
+                        message = choices[0].get('message', {})
+                        content = message.get('content', [])
+                        
+                        if len(content) == 0:
+                            raise LLMError(
+                                message="API返回的content数组为空",
+                                error_type=LLMErrorType.FORMAT_ERROR,
+                                status_code=200
+                            )
+                        
+                        # 查找包含image字段的content项
+                        image_content = None
+                        for item in content:
+                            if isinstance(item, dict) and 'image' in item:
+                                image_content = item
+                                break
+                        
+                        if image_content is None:
+                            logger.error(f"API返回格式错误，content中未找到image字段: {content}")
+                            raise LLMError(
+                                message=f"API返回格式错误，content中未找到image字段: {content}",
+                                error_type=LLMErrorType.FORMAT_ERROR,
+                                status_code=200
+                            )
+                        
+                        result_url = image_content['image']
                         return {
                             "success": True,
                             "result_url": result_url
                         }
                     else:
+                        logger.error(f"API返回格式错误，缺少output或choices字段: {result}")
                         raise LLMError(
                             message=f"API返回格式错误: {result}",
                             error_type=LLMErrorType.FORMAT_ERROR,
@@ -307,13 +341,17 @@ class OpenAIProvider(LLMProvider):
     - 详见ERROR_CODES.md文档
     """
     
-    async def _call_classification(self, image_bytes: bytes, prompt: str) -> Dict[str, Any]:
+    async def _call_classification(self, image_bytes: bytes, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> Dict[str, Any]:
         """使用OpenAI Vision API进行分类"""
         try:
             from openai import AsyncOpenAI
             
             client = AsyncOpenAI(api_key=self.api_key)
             image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            
+            # 如果没有提供 max_tokens，使用分类任务的默认值（500）
+            if max_tokens is None:
+                max_tokens = settings.LLM_MAX_TOKENS_CLASSIFICATION or 500
             
             response = await client.chat.completions.create(
                 model=self.model,
@@ -331,7 +369,7 @@ class OpenAIProvider(LLMProvider):
                         ]
                     }
                 ],
-                max_tokens=settings.LLM_MAX_TOKENS,
+                max_tokens=max_tokens,
                 timeout=self.timeout
             )
             
@@ -409,7 +447,7 @@ class ClaudeProvider(LLMProvider):
     - 详见ERROR_CODES.md文档
     """
     
-    async def _call_classification(self, image_bytes: bytes, prompt: str) -> Dict[str, Any]:
+    async def _call_classification(self, image_bytes: bytes, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> Dict[str, Any]:
         """使用Claude Vision API进行分类"""
         try:
             from anthropic import AsyncAnthropic
@@ -417,9 +455,13 @@ class ClaudeProvider(LLMProvider):
             client = AsyncAnthropic(api_key=self.api_key)
             image_base64 = base64.b64encode(image_bytes).decode('utf-8')
             
+            # 如果没有提供 max_tokens，使用分类任务的默认值（500）
+            if max_tokens is None:
+                max_tokens = settings.LLM_MAX_TOKENS_CLASSIFICATION or 500
+            
             message = await client.messages.create(
                 model=self.model,
-                max_tokens=settings.LLM_MAX_TOKENS,
+                max_tokens=max_tokens,
                 messages=[
                     {
                         "role": "user",
@@ -516,7 +558,7 @@ class DeepseekProvider(LLMProvider):
     - 详见ERROR_CODES.md文档
     """
     
-    async def _call_classification(self, image_bytes: bytes, prompt: str) -> Dict[str, Any]:
+    async def _call_classification(self, image_bytes: bytes, prompt: str, max_tokens: Optional[int] = None, **kwargs) -> Dict[str, Any]:
         """使用Deepseek Vision API进行分类"""
         try:
             from openai import AsyncOpenAI
@@ -528,6 +570,10 @@ class DeepseekProvider(LLMProvider):
                 base_url="https://api.deepseek.com"
             )
             image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+            
+            # 如果没有提供 max_tokens，使用分类任务的默认值（500）
+            if max_tokens is None:
+                max_tokens = settings.LLM_MAX_TOKENS_CLASSIFICATION or 500
             
             response = await client.chat.completions.create(
                 model=self.model,
@@ -545,7 +591,7 @@ class DeepseekProvider(LLMProvider):
                         ]
                     }
                 ],
-                max_tokens=settings.LLM_MAX_TOKENS,
+                max_tokens=max_tokens,
                 timeout=self.timeout
             )
             
@@ -622,8 +668,8 @@ class DeepseekProvider(LLMProvider):
                 base_url="https://api.deepseek.com"
             )
             
-            # 支持自定义参数
-            max_tokens = kwargs.get('max_tokens', settings.LLM_MAX_TOKENS)
+            # 支持自定义参数（文本生成任务，默认2000）
+            max_tokens = kwargs.get('max_tokens', 2000)
             temperature = kwargs.get('temperature', 0.7)
             system_prompt = kwargs.get('system_prompt', None)
             

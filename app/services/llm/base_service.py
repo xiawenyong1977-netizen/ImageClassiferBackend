@@ -87,7 +87,9 @@ class BaseLLMService(ABC):
         self.model = model
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        self.timeout = timeout or settings.LLM_TIMEOUT
+        # timeout 应该由调用方根据任务类型传入，这里使用传入的值或默认值
+        # 如果没有传入，使用分类任务的默认超时时间（30秒）
+        self.timeout = timeout or settings.LLM_TIMEOUT_CLASSIFICATION or 30
     
     async def call_with_retry(
         self,
