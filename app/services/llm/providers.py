@@ -88,14 +88,22 @@ class AliyunProvider(LLMProvider):
                 }
             ]
             
+            # 准备调用参数
+            call_kwargs = {
+                "model": self.model,
+                "messages": messages
+            }
+            
+            # 如果提供了 max_tokens，添加到调用参数中
+            # DashScope API 支持 max_tokens 参数来控制输出长度
+            if max_tokens is not None:
+                call_kwargs["max_tokens"] = max_tokens
+            
             # 同步调用（dashscope SDK暂不支持异步）
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda: MultiModalConversation.call(
-                    model=self.model,
-                    messages=messages
-                )
+                lambda: MultiModalConversation.call(**call_kwargs)
             )
             
             # 解析响应

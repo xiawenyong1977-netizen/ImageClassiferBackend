@@ -62,15 +62,16 @@ class UserPhotosService:
                         f"{image_uri[:100]}..."
                     )
                 
-                # 使用INSERT ... ON DUPLICATE KEY UPDATE（使用别名语法避免VALUES()函数弃用警告）
+                # 使用INSERT ... ON DUPLICATE KEY UPDATE
+                # 使用VALUES()函数引用插入的值（虽然已弃用，但兼容性最好）
                 sql = """
                 INSERT INTO user_photos (user_id, openid, image_hash, image_uri, classify_count, first_seen_at, last_seen_at)
-                VALUES (%s, %s, %s, %s, 1, NOW(), NOW()) AS new_values
+                VALUES (%s, %s, %s, %s, 1, NOW(), NOW())
                 ON DUPLICATE KEY UPDATE
                     classify_count = user_photos.classify_count + 1,
                     last_seen_at = NOW(),
-                    image_uri = COALESCE(new_values.image_uri, user_photos.image_uri),
-                    openid = COALESCE(new_values.openid, user_photos.openid)
+                    image_uri = COALESCE(VALUES(image_uri), user_photos.image_uri),
+                    openid = COALESCE(VALUES(openid), user_photos.openid)
                 """
                 await cursor.execute(sql, (user_id, resolved_openid, image_hash, truncated_image_uri))
                 

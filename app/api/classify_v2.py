@@ -949,7 +949,6 @@ async def batch_check_cache_v2(
             user_id=user_id,
             response_time_ms=response_time_ms
         )
-        request_id = IDGenerator.generate_request_id()
         return BatchCheckCacheV2Response(
             error_type=error_type,
             error=f"内部服务异常: {error_msg}",
