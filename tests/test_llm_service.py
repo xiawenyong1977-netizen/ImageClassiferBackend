@@ -1760,11 +1760,18 @@ class TestLLMServiceErrorHandling:
             user_message="服务暂时不可用，请稍后重试"
         )
         
+        # Mock AliyunProvider 的创建，确保新创建的适配器也能被 mock
+        import importlib
+        llm_service_module = importlib.import_module('app.services.llm.llm_service')
         with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
-             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+             patch.object(llm_service_module, 'AliyunProvider') as mock_provider_class:
+            
+            # 设置 mock_provider_class 返回的实例的 call_with_retry 方法
+            mock_new_adapter = MagicMock()
+            mock_new_adapter.call_with_retry = AsyncMock(side_effect=auth_error)
+            mock_provider_class.return_value = mock_new_adapter
             
             mock_cache.return_value = None
-            mock_call.side_effect = auth_error
             
             result = await service.edit_image(
                 image_bytes=image_bytes,
