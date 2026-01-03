@@ -585,8 +585,11 @@ class TestLLMService:
         )
         
         # Mock AliyunProvider 的创建，确保新创建的适配器也能被 mock
+        # 使用 importlib 确保正确导入模块
+        import importlib
+        llm_service_module = importlib.import_module('app.services.llm.llm_service')
         with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
-             patch('app.services.llm.llm_service.AliyunProvider') as mock_provider_class, \
+             patch.object(llm_service_module, 'AliyunProvider') as mock_provider_class, \
              patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
             
             # 设置 mock_provider_class 返回的实例的 call_with_retry 方法
@@ -1014,9 +1017,11 @@ class TestLLMServiceCache:
         edit_type = "enhance"
         
         # Mock AliyunProvider 的创建，确保新创建的适配器也能被 mock
+        import importlib
+        llm_service_module = importlib.import_module('app.services.llm.llm_service')
         with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
              patch.object(unified_llm_cache, 'save_result', new_callable=AsyncMock) as mock_save, \
-             patch('app.services.llm.llm_service.AliyunProvider') as mock_provider_class:
+             patch.object(llm_service_module, 'AliyunProvider') as mock_provider_class:
             
             # 设置 mock_provider_class 返回的实例的 call_with_retry 方法
             mock_new_adapter = MagicMock()
@@ -1085,8 +1090,10 @@ class TestLLMServiceCache:
         prompt = "edit prompt"
         
         # Mock AliyunProvider 的创建，确保新创建的适配器也能被 mock
+        import importlib
+        llm_service_module = importlib.import_module('app.services.llm.llm_service')
         with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
-             patch('app.services.llm.llm_service.AliyunProvider') as mock_provider_class:
+             patch.object(llm_service_module, 'AliyunProvider') as mock_provider_class:
             
             # 设置 mock_provider_class 返回的实例的 call_with_retry 方法
             mock_new_adapter = MagicMock()
@@ -1704,9 +1711,11 @@ class TestLLMServiceErrorHandling:
         )
         
         # Mock AliyunProvider 的创建，确保新创建的适配器也能被 mock
+        import importlib
+        llm_service_module = importlib.import_module('app.services.llm.llm_service')
         with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
              patch.object(unified_llm_cache, 'save_error_result', new_callable=AsyncMock) as mock_save_error, \
-             patch('app.services.llm.llm_service.AliyunProvider') as mock_provider_class:
+             patch.object(llm_service_module, 'AliyunProvider') as mock_provider_class:
             
             # 设置 mock_provider_class 返回的实例的 call_with_retry 方法
             mock_new_adapter = MagicMock()
@@ -1781,9 +1790,11 @@ class TestLLMServiceErrorHandling:
         edit_type = "enhance"
         
         # Mock AliyunProvider 的创建，确保新创建的适配器也能被 mock
+        import importlib
+        llm_service_module = importlib.import_module('app.services.llm.llm_service')
         with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
              patch.object(unified_llm_cache, 'save_result', new_callable=AsyncMock) as mock_save, \
-             patch('app.services.llm.llm_service.AliyunProvider') as mock_provider_class:
+             patch.object(llm_service_module, 'AliyunProvider') as mock_provider_class:
             
             # 设置 mock_provider_class 返回的实例的 call_with_retry 方法
             mock_new_adapter = MagicMock()
