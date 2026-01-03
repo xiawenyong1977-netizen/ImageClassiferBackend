@@ -9,6 +9,14 @@ on:
       - main
       - master
       - develop
+  # 手动触发工作流（可以只运行部署，或重新运行测试+部署）
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: '跳过测试直接部署（仅当代码已测试通过时使用）'
+        required: false
+        default: 'false'
+        type: boolean
 
 env:
   PYTHON_VERSION: '3.10'
@@ -23,10 +31,13 @@ jobs:
     # - PR 和对应的 push 使用相同的 group（基于分支名），避免重复运行
     # 对于 PR 事件，使用 PR 的源分支名；对于 push 事件，使用当前分支名
     # 使用 github.ref_name 获取分支名（去掉 refs/heads/ 前缀）
+    # workflow_dispatch 事件不取消进行中的任务
     concurrency:
       group: test-${{ github.event.pull_request.head.ref || github.ref_name }}
-      cancel-in-progress: true
+      cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    # 如果手动触发且选择跳过测试，则跳过此任务
+    if: github.event.inputs.skip_tests != 'true'
     
     services:
       mysql:
@@ -239,12 +250,18 @@ jobs:
           file: ./coverage.xml
           fail_ci_if_error: false
 
-  # 部署任务（仅在 main/master 分支推送时触发）
+  # 部署任务（仅在 main/master 分支推送时触发，或手动触发）
   deploy:
     name: Deploy to Server
     runs-on: ubuntu-latest
+    # 如果跳过测试，则不依赖测试任务；否则需要测试通过
     needs: test
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    if: |
+      (
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
+        (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+      ) &&
+      (github.event.inputs.skip_tests != 'true')
     
     steps:
       - name: Checkout code
