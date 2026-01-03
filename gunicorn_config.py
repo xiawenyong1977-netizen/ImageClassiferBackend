@@ -11,7 +11,8 @@ bind = "0.0.0.0:8000"
 backlog = 2048
 
 # Worker配置
-workers = multiprocessing.cpu_count() * 2 + 1
+# 固定为 2 个 worker（针对 1.8GB 内存服务器优化）
+workers = 2
 worker_class = "uvicorn.workers.UvicornWorker"
 worker_connections = 1000
 max_requests = 1000  # 处理N个请求后重启worker（防止内存泄漏）

@@ -36,40 +36,74 @@ class Database:
                     pass
                 self.pool = None
         
-        try:
-            # 如果配置了 unix_socket，优先使用 socket 连接
-            if settings.MYSQL_UNIX_SOCKET:
-                self.pool = await aiomysql.create_pool(
-                    unix_socket=settings.MYSQL_UNIX_SOCKET,
-                    user=settings.MYSQL_USER,
-                    password=settings.MYSQL_PASSWORD,
-                    db=settings.MYSQL_DATABASE,
-                    charset='utf8mb4',
-                    minsize=1,
-                    maxsize=settings.MYSQL_POOL_SIZE,
-                    autocommit=True,
-                    pool_recycle=300,
-                    echo=settings.APP_DEBUG
-                )
-                logger.debug(f"数据库连接池已创建（使用socket）: {settings.MYSQL_UNIX_SOCKET}/{settings.MYSQL_DATABASE}")
-            else:
-                self.pool = await aiomysql.create_pool(
-                    host=settings.MYSQL_HOST,
-                    port=settings.MYSQL_PORT,
-                    user=settings.MYSQL_USER,
-                    password=settings.MYSQL_PASSWORD,
-                    db=settings.MYSQL_DATABASE,
-                    charset='utf8mb4',
-                    minsize=1,
-                    maxsize=settings.MYSQL_POOL_SIZE,
-                    autocommit=True,
-                    pool_recycle=300,
-                    echo=settings.APP_DEBUG
-                )
-                logger.debug(f"数据库连接池已创建: {settings.MYSQL_HOST}:{settings.MYSQL_PORT}/{settings.MYSQL_DATABASE}")
-        except Exception as e:
-            logger.error(f"数据库连接失败: {e}")
-            raise
+        # 添加随机延迟，避免多个 worker 同时创建连接池时的竞态条件
+        # 同时给 MySQL socket 时间完全启动
+        import asyncio
+        import random
+        delay = random.uniform(0.5, 1.5)  # 随机延迟 0.5-1.5 秒，避免并发连接冲突
+        await asyncio.sleep(delay)
+        
+        max_retries = 3
+        retry_delay = 1.0
+        
+        for attempt in range(max_retries):
+            try:
+                # 打印连接参数用于调试（DEBUG 级别）
+                logger.debug(f"[数据库连接] 尝试 {attempt + 1}/{max_retries} - MYSQL_UNIX_SOCKET={settings.MYSQL_UNIX_SOCKET}, MYSQL_HOST={settings.MYSQL_HOST}, MYSQL_PORT={settings.MYSQL_PORT}, MYSQL_USER={settings.MYSQL_USER}, MYSQL_DATABASE={settings.MYSQL_DATABASE}")
+                
+                # 如果配置了 unix_socket，优先使用 socket 连接
+                if settings.MYSQL_UNIX_SOCKET:
+                    logger.debug(f"[数据库连接] 使用 Socket 连接: {settings.MYSQL_UNIX_SOCKET}")
+                    self.pool = await aiomysql.create_pool(
+                        unix_socket=settings.MYSQL_UNIX_SOCKET,
+                        user=settings.MYSQL_USER,
+                        password=settings.MYSQL_PASSWORD,
+                        db=settings.MYSQL_DATABASE,
+                        charset='utf8mb4',
+                        minsize=1,
+                        maxsize=settings.MYSQL_POOL_SIZE,
+                        autocommit=True,
+                        pool_recycle=300,
+                        echo=settings.APP_DEBUG
+                    )
+                    logger.info(f"数据库连接池已创建（使用socket）: {settings.MYSQL_UNIX_SOCKET}/{settings.MYSQL_DATABASE}")
+                else:
+                    logger.debug(f"[数据库连接] 使用 TCP 连接: {settings.MYSQL_HOST}:{settings.MYSQL_PORT}")
+                    self.pool = await aiomysql.create_pool(
+                        host=settings.MYSQL_HOST,
+                        port=settings.MYSQL_PORT,
+                        user=settings.MYSQL_USER,
+                        password=settings.MYSQL_PASSWORD,
+                        db=settings.MYSQL_DATABASE,
+                        charset='utf8mb4',
+                        minsize=1,
+                        maxsize=settings.MYSQL_POOL_SIZE,
+                        autocommit=True,
+                        pool_recycle=300,
+                        echo=settings.APP_DEBUG
+                    )
+                    logger.info(f"数据库连接池已创建: {settings.MYSQL_HOST}:{settings.MYSQL_PORT}/{settings.MYSQL_DATABASE}")
+                
+                # 连接成功，退出重试循环
+                break
+            except Exception as e:
+                import traceback
+                error_detail = traceback.format_exc()
+                logger.error(f"数据库连接失败（尝试 {attempt + 1}/{max_retries}）: {e}")
+                
+                # 如果是最后一次尝试，输出详细错误信息
+                if attempt == max_retries - 1:
+                    logger.error(f"错误详情:\n{error_detail}")
+                    # 如果是 socket 连接失败，尝试检查 socket 文件
+                    if settings.MYSQL_UNIX_SOCKET:
+                        import os
+                        socket_path = settings.MYSQL_UNIX_SOCKET
+                        logger.error(f"Socket 文件检查: 存在={os.path.exists(socket_path)}, 可读={os.access(socket_path, os.R_OK) if os.path.exists(socket_path) else False}, 可写={os.access(socket_path, os.W_OK) if os.path.exists(socket_path) else False}")
+                    raise
+                else:
+                    # 不是最后一次尝试，等待后重试
+                    logger.warning(f"等待 {retry_delay} 秒后重试...")
+                    await asyncio.sleep(retry_delay)
     
     async def disconnect(self):
         """关闭数据库连接池"""

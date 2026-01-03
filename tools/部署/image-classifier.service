@@ -1,8 +1,8 @@
 [Unit]
 Description=Image Classifier Backend API Service
 Documentation=https://github.com/xiawenyong1977-netizen/ImageClassiferBackend
-After=network.target mysql.service
-Wants=mysql.service
+After=network.target mysqld.service
+Wants=mysqld.service
 
 [Service]
 Type=notify
@@ -28,9 +28,8 @@ LimitNPROC=4096
 
 # 安全设置
 PrivateTmp=true
-ProtectSystem=strict
+ProtectSystem=false
 ProtectHome=true
-ReadWritePaths=/var/log/image-classifier /var/run/image-classifier.pid
 NoNewPrivileges=true
 
 # 重启策略

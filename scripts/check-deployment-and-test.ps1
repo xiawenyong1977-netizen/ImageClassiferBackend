@@ -5,7 +5,7 @@
 # =====================================================
 
 param(
-    [string]$Server = "root@web",
+    [string]$Server = "root@app",
     [string]$RemoteDir = "/opt/ICBackend"
 )
 

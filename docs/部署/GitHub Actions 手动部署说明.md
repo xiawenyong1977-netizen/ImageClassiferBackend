@@ -8,6 +8,8 @@ GitHub Actions 工作流支持手动触发部署，方便在需要时重新部�
 
 ### 方法一：通过 GitHub Web 界面（推荐）
 
+**重要提示**：确保 `.github/workflows/ci-cd.yml` 文件已提交并推送到 GitHub，否则不会显示手动触发选项。
+
 1. **打开 GitHub 仓库页面**
    - 访问你的 GitHub 仓库：`https://github.com/你的用户名/ImageClassifierBackend`
 
@@ -15,17 +17,33 @@ GitHub Actions 工作流支持手动触发部署，方便在需要时重新部�
    - 点击仓库顶部的 **"Actions"** 标签
 
 3. **选择工作流**
-   - 在左侧边栏选择 **"CI/CD Pipeline"** 工作流
+   - 在左侧边栏找到并点击 **"CI/CD Pipeline"** 工作流
+   - 如果看不到这个工作流，说明工作流文件可能还没有推送到 GitHub
 
-4. **手动触发**
-   - 点击右侧的 **"Run workflow"** 按钮
-   - 选择要部署的分支（通常是 `main` 或 `master`）
-   - **可选**：勾选 **"跳过测试直接部署"**（仅当代码已测试通过时使用）
-   - 点击 **"Run workflow"** 按钮
+4. **查找手动触发按钮**
+   - 在工作流页面右侧，查找 **"Run workflow"** 下拉按钮
+   - 如果看不到这个按钮，请检查：
+     - ✅ 确认 `.github/workflows/ci-cd.yml` 文件已提交到仓库
+     - ✅ 确认文件包含 `workflow_dispatch:` 配置
+     - ✅ 刷新页面（按 `Ctrl+F5` 或 `Cmd+Shift+R`）
+     - ✅ 确认你有仓库的写入权限
 
-5. **查看部署进度**
-   - 工作流开始运行后，点击最新的运行记录查看进度
+5. **手动触发**
+   - 点击 **"Run workflow"** 下拉按钮
+   - 在弹出的对话框中：
+     - 选择要部署的分支（通常是 `main` 或 `master`）
+     - **可选**：勾选 **"跳过测试直接部署"**（仅当代码已测试通过时使用）
+   - 点击绿色的 **"Run workflow"** 按钮
+
+6. **查看部署进度**
+   - 工作流开始运行后，页面会自动刷新显示新的运行记录
+   - 点击最新的运行记录查看详细进度
    - 等待部署完成
+
+**如果仍然看不到 "Run workflow" 按钮**：
+- 检查工作流文件是否在正确的路径：`.github/workflows/ci-cd.yml`
+- 确认文件已推送到 GitHub（在仓库中查看文件是否存在）
+- 尝试先推送一次代码，触发一次自动运行，然后再查看手动触发选项
 
 ### 方法二：通过 GitHub CLI
 
@@ -174,6 +192,50 @@ systemctl restart image-classifier
 ```
 
 ## 常见问题
+
+### Q: 看不到 "Run workflow" 按钮怎么办？
+
+A: 请按以下步骤排查：
+
+1. **确认工作流文件已提交并推送**
+   ```bash
+   # 检查文件是否存在
+   ls -la .github/workflows/ci-cd.yml
+   
+   # 检查文件内容是否包含 workflow_dispatch
+   grep -A 5 "workflow_dispatch" .github/workflows/ci-cd.yml
+   ```
+
+2. **推送工作流文件到 GitHub**（如果还没有推送）
+   ```bash
+   git add .github/workflows/ci-cd.yml
+   git commit -m "添加手动触发部署功能"
+   git push origin main
+   ```
+
+3. **等待并刷新 GitHub 页面**
+   - GitHub 需要一些时间来识别新的工作流配置（通常几秒钟）
+   - 刷新页面（按 `Ctrl+F5` 或 `Cmd+Shift+R` 强制刷新）
+   - 如果还是看不到，等待 1-2 分钟后再试
+
+4. **确认权限**
+   - 确保你有仓库的写入权限
+   - 如果是组织仓库，可能需要管理员权限才能看到手动触发选项
+
+5. **检查工作流文件语法**
+   - 在 GitHub 仓库中打开 `.github/workflows/ci-cd.yml`
+   - 确认文件格式正确，没有语法错误
+   - 确认包含 `workflow_dispatch:` 配置
+
+6. **先触发一次自动运行**
+   - 如果工作流从未运行过，可能不会显示手动触发按钮
+   - 可以先 push 一次代码触发自动运行
+   - 运行完成后，手动触发选项就会出现
+
+**按钮位置说明**：
+- "Run workflow" 按钮位于工作流页面**右上角**
+- 如果工作流从未运行过，可能需要先有至少一次运行记录
+- 按钮是一个**下拉菜单**，点击后会弹出对话框
 
 ### Q: 手动触发后，测试任务被跳过了，但部署任务还在等待？
 

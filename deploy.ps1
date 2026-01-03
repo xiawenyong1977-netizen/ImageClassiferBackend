@@ -28,7 +28,7 @@ param(
     [switch]$Incremental
 )
 
-$SERVER = "root@web"
+$SERVER = "root@app"
 $REMOTE_DIR = "/opt/ICBackend"  # 与文档保持一致
 $LOCAL_DIR = $PSScriptRoot
 $PYTHON_VERSION = "3.10"  # 指定 Python 版本
