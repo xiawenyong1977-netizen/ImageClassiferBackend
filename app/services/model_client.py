@@ -34,9 +34,20 @@ class ModelClient:
     ]
     
     def __init__(self):
+        from app.services.llm.model_config import TaskType, get_default_model
+        
         self.provider = settings.LLM_PROVIDER
         self.api_key = settings.LLM_API_KEY
-        self.model = settings.LLM_MODEL
+        # 🔥 使用分类任务的默认模型（向后兼容）
+        # 优先级：1. LLM_MODEL_CLASSIFICATION配置 2. 提供商默认模型
+        if settings.LLM_MODEL_CLASSIFICATION:
+            self.model = settings.LLM_MODEL_CLASSIFICATION
+        else:
+            # 使用提供商默认的分类模型
+            default_model = get_default_model(self.provider, TaskType.CLASSIFICATION)
+            if not default_model:
+                raise ValueError(f"提供商 {self.provider} 不支持图像分类任务")
+            self.model = default_model
     
     async def classify_image(self, image_bytes: bytes) -> Dict:
         """
@@ -214,8 +225,8 @@ class ModelClient:
                         ]
                     }
                 ],
-                max_tokens=settings.LLM_MAX_TOKENS,
-                timeout=settings.LLM_TIMEOUT
+                max_tokens=settings.LLM_MAX_TOKENS_CLASSIFICATION or 500,
+                timeout=settings.LLM_TIMEOUT_CLASSIFICATION or 30
             )
             
             # 解析响应
@@ -251,7 +262,7 @@ class ModelClient:
             # 调用API
             message = await client.messages.create(
                 model=self.model,
-                max_tokens=settings.LLM_MAX_TOKENS,
+                max_tokens=settings.LLM_MAX_TOKENS_CLASSIFICATION or 500,
                 messages=[
                     {
                         "role": "user",
@@ -271,7 +282,7 @@ class ModelClient:
                         ],
                     }
                 ],
-                timeout=settings.LLM_TIMEOUT
+                timeout=settings.LLM_TIMEOUT_CLASSIFICATION or 30
             )
             
             # 解析响应

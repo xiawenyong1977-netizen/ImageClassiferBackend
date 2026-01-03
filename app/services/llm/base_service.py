@@ -87,7 +87,9 @@ class BaseLLMService(ABC):
         self.model = model
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        self.timeout = timeout or settings.LLM_TIMEOUT
+        # timeout 应该由调用方根据任务类型传入，这里使用传入的值或默认值
+        # 如果没有传入，使用分类任务的默认超时时间（30秒）
+        self.timeout = timeout or settings.LLM_TIMEOUT_CLASSIFICATION or 30
     
     async def call_with_retry(
         self,
@@ -117,20 +119,12 @@ class BaseLLMService(ABC):
         for attempt in range(1, self.max_retries + 1):
             try:
                 attempt_start_time = time.time()
-                logger.info(
-                    f"[{self.provider}] 调用大模型 [{task_type}] "
-                    f"(尝试 {attempt}/{self.max_retries}, model={self.model})"
-                )
+                # 不记录成功日志，只记录失败日志
                 
                 # 调用具体的API方法
                 result = await self._call_api(task_type, image_bytes, prompt, **kwargs)
                 
-                elapsed_time = time.time() - attempt_start_time
-                logger.info(
-                    f"[{self.provider}] 大模型调用成功 [{task_type}] "
-                    f"(耗时: {elapsed_time:.2f}s, model={self.model})"
-                )
-                
+                # 成功时不记录日志，减少日志噪音
                 return result
                 
             except Exception as e:

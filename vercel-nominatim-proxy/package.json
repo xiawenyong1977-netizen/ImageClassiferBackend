@@ -1,0 +1,21 @@
+{
+  "name": "nominatim-proxy",
+  "version": "1.0.0",
+  "description": "Vercel Serverless Function to proxy Nominatim API requests",
+  "main": "api/reverse.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel deploy",
+    "prod": "vercel deploy --prod"
+  },
+  "keywords": [
+    "nominatim",
+    "proxy",
+    "vercel",
+    "serverless"
+  ],
+  "author": "",
+  "license": "MIT"
+}
+
+

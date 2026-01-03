@@ -48,7 +48,25 @@ cp -r app "$NEW_VERSION_DIR/"
 cp requirements.txt "$NEW_VERSION_DIR/"
 cp gunicorn_config.py "$NEW_VERSION_DIR/" 2>/dev/null || true
 cp env.example "$NEW_VERSION_DIR/" 2>/dev/null || true
+cp env.example.secrets "$NEW_VERSION_DIR/" 2>/dev/null || true
 cp -r prompts "$NEW_VERSION_DIR/" 2>/dev/null || true
+cp -r tests "$NEW_VERSION_DIR/" 2>/dev/null || true
+cp -r scripts "$NEW_VERSION_DIR/" 2>/dev/null || true
+cp pytest.ini "$NEW_VERSION_DIR/" 2>/dev/null || true
+
+# 转换 shell 脚本的行结束符（CRLF -> LF）
+echo "  转换 .sh 文件的行结束符..."
+find "$NEW_VERSION_DIR" -name "*.sh" -type f | while read file; do
+    if command -v dos2unix >/dev/null 2>&1; then
+        dos2unix "$file" 2>/dev/null || true
+    elif command -v sed >/dev/null 2>&1; then
+        sed -i "s/\r$//" "$file" 2>/dev/null || true
+    else
+        perl -pi -e "s/\r\n/\n/" "$file" 2>/dev/null || \
+        python3 -c "import sys; data=open('$file','rb').read().replace(b'\r\n',b'\n'); open('$file','wb').write(data)" 2>/dev/null || true
+    fi
+done
+echo "  ✓ 行结束符转换完成"
 
 # 创建或使用共享虚拟环境
 echo -e "${YELLOW}[3/6] 检查共享虚拟环境...${NC}"
@@ -122,6 +140,82 @@ echo "  ✓ 已创建符号链接: $NEW_VERSION_DIR/.env -> $ENV_FILE"
 if [ -f "$ENV_SECRETS_FILE" ]; then
     ln -sfn "$ENV_SECRETS_FILE" "$NEW_VERSION_DIR/.env.secrets"
     echo "  ✓ 已创建符号链接: $NEW_VERSION_DIR/.env.secrets -> $ENV_SECRETS_FILE"
+fi
+
+# 检查并配置 systemd 服务
+echo -e "${YELLOW}[5/6] 检查 systemd 服务配置...${NC}"
+SERVICE_FILE="/etc/systemd/system/image-classifier.service"
+if [ ! -f "$SERVICE_FILE" ]; then
+    echo "  创建 systemd 服务文件..."
+    cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=Image Classifier Backend API Service
+Documentation=https://github.com/xiawenyong1977-netizen/ImageClassiferBackend
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=notify
+User=root
+Group=root
+WorkingDirectory=$DEPLOY_DIR/current
+Environment="PATH=$DEPLOY_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+# 加载环境变量文件（如果存在）
+EnvironmentFile=-$DEPLOY_DIR/.env
+EnvironmentFile=-$DEPLOY_DIR/.env.secrets
+
+# 使用 gunicorn 启动应用
+ExecStart=$DEPLOY_DIR/venv/bin/gunicorn -c gunicorn_config.py app.main:app
+ExecReload=/bin/kill -s HUP \$MAINPID
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# 资源限制
+LimitNOFILE=65535
+LimitNPROC=4096
+
+# 安全设置
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/image-classifier /var/run/image-classifier.pid
+NoNewPrivileges=true
+
+# 重启策略
+Restart=on-failure
+RestartSec=10s
+StartLimitInterval=300
+StartLimitBurst=5
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=image-classifier
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    echo "  ✓ 服务文件已创建: $SERVICE_FILE"
+    
+    # 创建日志目录
+    mkdir -p /var/log/image-classifier
+    chown -R root:root /var/log/image-classifier
+    
+    # 重新加载 systemd
+    systemctl daemon-reload
+    echo "  ✓ systemd 已重新加载"
+    
+    # 启用服务（但不启动，等待版本切换后再启动）
+    systemctl enable image-classifier 2>/dev/null || true
+    echo "  ✓ 服务已启用（开机自启）"
+else
+    echo "  ✓ 服务文件已存在，跳过创建"
+    # 检查服务文件是否需要更新（检查 WorkingDirectory 是否正确）
+    if ! grep -q "WorkingDirectory=$DEPLOY_DIR/current" "$SERVICE_FILE" 2>/dev/null; then
+        echo "  警告: 服务文件中的 WorkingDirectory 可能不正确，建议检查 $SERVICE_FILE"
+    fi
 fi
 
 # 获取当前版本

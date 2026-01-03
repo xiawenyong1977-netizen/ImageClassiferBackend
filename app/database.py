@@ -18,6 +18,24 @@ class Database:
     
     async def connect(self):
         """创建数据库连接池"""
+        # 如果连接池已存在，直接返回（避免重复创建）
+        if self.pool is not None:
+            try:
+                # 检查连接池是否仍然有效
+                async with self.pool.acquire() as conn:
+                    await conn.ping()
+                logger.debug("数据库连接池已存在且有效，跳过创建")
+                return
+            except Exception:
+                # 如果连接池无效，关闭它并重新创建
+                logger.debug("检测到无效的连接池，将重新创建")
+                try:
+                    self.pool.close()
+                    await self.pool.wait_closed()
+                except Exception:
+                    pass
+                self.pool = None
+        
         try:
             # 如果配置了 unix_socket，优先使用 socket 连接
             if settings.MYSQL_UNIX_SOCKET:
@@ -33,7 +51,7 @@ class Database:
                     pool_recycle=300,
                     echo=settings.APP_DEBUG
                 )
-                logger.info(f"数据库连接池已创建（使用socket）: {settings.MYSQL_UNIX_SOCKET}/{settings.MYSQL_DATABASE}")
+                logger.debug(f"数据库连接池已创建（使用socket）: {settings.MYSQL_UNIX_SOCKET}/{settings.MYSQL_DATABASE}")
             else:
                 self.pool = await aiomysql.create_pool(
                     host=settings.MYSQL_HOST,
@@ -48,7 +66,7 @@ class Database:
                     pool_recycle=300,
                     echo=settings.APP_DEBUG
                 )
-                logger.info(f"数据库连接池已创建: {settings.MYSQL_HOST}:{settings.MYSQL_PORT}/{settings.MYSQL_DATABASE}")
+                logger.debug(f"数据库连接池已创建: {settings.MYSQL_HOST}:{settings.MYSQL_PORT}/{settings.MYSQL_DATABASE}")
         except Exception as e:
             logger.error(f"数据库连接失败: {e}")
             raise
@@ -62,11 +80,11 @@ class Database:
         self.pool = None  # 先设置为None，避免并发问题
         
         try:
-            # 关闭连接池，这会关闭所有连接
+            # 先关闭连接池，这会关闭所有连接
             pool.close()
             # 等待连接池关闭完成
             await pool.wait_closed()
-            logger.info("数据库连接池已关闭")
+            logger.debug("数据库连接池已关闭")
         except RuntimeError as e:
             # 如果事件循环已关闭，无法等待关闭完成
             error_msg = str(e).lower()
@@ -77,16 +95,25 @@ class Database:
                 logger.warning(f"数据库连接池关闭时出现RuntimeError（已忽略）: {e}")
         except Exception as e:
             # 其他错误也记录警告，但不抛出异常
-            logger.warning(f"数据库连接池关闭时出现错误（已忽略）: {e}")
+            # 特别注意：在测试环境中，连接对象可能在事件循环关闭后才被垃圾回收，
+            # 这会导致 aiomysql 的 Connection.__del__ 方法抛出 RuntimeError，
+            # 这是正常的，不影响测试结果
+            error_msg = str(e).lower()
+            if "event loop is closed" in error_msg:
+                logger.debug("数据库连接池关闭时事件循环已关闭（测试环境正常现象）")
+            else:
+                logger.warning(f"数据库连接池关闭时出现错误（已忽略）: {e}")
     
     @asynccontextmanager
     async def get_connection(self):
         """获取数据库连接（上下文管理器）"""
+        logger.debug(f"[database] get_connection开始: pool存在={self.pool is not None}")
         # 如果连接池不存在或绑定到了不同的事件循环，重新创建
         import asyncio
         current_loop = asyncio.get_running_loop()
         
         if not self.pool:
+            logger.debug(f"[database] 连接池不存在，准备创建...")
             await self.connect()
         else:
             # 检查连接池是否绑定到当前事件循环
@@ -110,16 +137,22 @@ class Database:
                 pass
         
         try:
+            logger.debug(f"[database] 准备从连接池获取连接...")
             async with self.pool.acquire() as conn:
+                logger.debug(f"[database] 已从连接池获取连接，准备ping...")
                 try:
                     # 确保连接可用并设置会话级隔离级别与autocommit
                     await conn.ping()
+                    logger.debug(f"[database] ping成功，准备设置会话参数...")
                     async with conn.cursor() as cursor:
                         await cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
                         await cursor.execute("SET autocommit=1")
+                    logger.debug(f"[database] 会话参数设置完成")
                 except Exception as e:
                     logger.warning(f"数据库连接会话初始化失败: {e}")
+                logger.debug(f"[database] 准备yield连接...")
                 yield conn
+                logger.debug(f"[database] 连接已返回给调用者")
         except RuntimeError as e:
             # 检查是否是事件循环问题
             error_msg = str(e).lower()
@@ -166,7 +199,9 @@ class Database:
     @asynccontextmanager
     async def get_cursor(self):
         """获取游标（上下文管理器）"""
+        logger.debug(f"[database] get_cursor开始...")
         async with self.get_connection() as conn:
+            logger.debug(f"[database] get_cursor已获取连接，准备创建游标...")
             async with conn.cursor(aiomysql.DictCursor) as cursor:
                 yield cursor
                 await conn.commit()

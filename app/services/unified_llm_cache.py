@@ -96,15 +96,16 @@ class UnifiedLLMCacheService:
                 await cursor.execute(sql, (prompt_hash, image_hash))
                 row = await cursor.fetchone()
                 
+                # 不记录日志，由调用方的汇总日志统一输出
                 if not row:
-                    logger.debug(f"缓存未命中: prompt_hash={prompt_hash[:16]}..., image_hash={image_hash[:16]}...")
                     return None
                 
                 # 解析JSON
                 model_results = json.loads(row['model_results'])
                 
-                # 更新命中次数
-                await self._increment_hit_count(prompt_hash, image_hash)
+                # 更新命中次数（复用当前游标，避免嵌套连接）
+                # 不记录日志，减少日志噪音
+                await self._increment_hit_count(prompt_hash, image_hash, cursor=cursor)
                 
                 # 如果指定了模型Key，只返回该模型的结果
                 if model_key:
@@ -271,7 +272,7 @@ class UnifiedLLMCacheService:
                         json.dumps(initial_model_results, ensure_ascii=False)
                     ))
                 
-                logger.info(f"缓存已保存: prompt_hash={prompt_hash[:16]}..., image_hash={image_hash[:16]}..., model={model_key}")
+                # 成功时不记录日志，减少日志噪音
                 return True
                 
         except Exception as e:
@@ -421,10 +422,19 @@ class UnifiedLLMCacheService:
             logger.error(f"获取模型列表失败: {e}")
             return []
     
-    async def _increment_hit_count(self, prompt_hash: str, image_hash: str) -> bool:
-        """增加命中次数"""
+    async def _increment_hit_count(self, prompt_hash: str, image_hash: str, cursor=None) -> bool:
+        """
+        增加命中次数
+        
+        Args:
+            prompt_hash: 提示词哈希
+            image_hash: 图片哈希
+            cursor: 可选的数据库游标（如果提供，复用已有游标；否则创建新连接）
+        """
         try:
-            async with db.get_cursor() as cursor:
+            if cursor is not None:
+                # 复用已有的游标（避免嵌套连接）
+                # 不记录日志，减少日志噪音
                 sql = """
                 UPDATE llm_inference_cache_v2
                 SET 
@@ -434,6 +444,20 @@ class UnifiedLLMCacheService:
                 """
                 await cursor.execute(sql, (prompt_hash, image_hash))
                 return True
+            else:
+                # 创建新的连接
+                logger.info(f"[unified_llm_cache] 创建新连接更新命中次数...")
+                async with db.get_cursor() as new_cursor:
+                    sql = """
+                    UPDATE llm_inference_cache_v2
+                    SET 
+                        hit_count = hit_count + 1,
+                        last_hit_at = NOW()
+                    WHERE prompt_hash = %s AND image_hash = %s
+                    """
+                    await new_cursor.execute(sql, (prompt_hash, image_hash))
+                    # 不记录日志，减少日志噪音
+                    return True
         except Exception as e:
             logger.error(f"更新命中次数失败: {e}")
             return False

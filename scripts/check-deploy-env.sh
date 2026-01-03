@@ -121,6 +121,60 @@ else
     check_warn ".env.secrets 文件不存在（部署时会从 env.example.secrets 创建）"
 fi
 
+# 5.1. 检查大模型配置（必需）
+if [ -f "$DEPLOY_DIR/.env" ] && [ -f "$DEPLOY_DIR/.env.secrets" ]; then
+    echo -e "${BLUE}[5.1/10] 检查大模型配置...${NC}"
+    LLM_PROVIDER=$(grep -E "^LLM_PROVIDER=" "$DEPLOY_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+    LLM_API_KEY=$(grep -E "^LLM_API_KEY=" "$DEPLOY_DIR/.env.secrets" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+    
+    if [ -z "$LLM_PROVIDER" ]; then
+        check_warn "LLM_PROVIDER 未配置（将使用默认值: aliyun）"
+    else
+        check_pass "LLM_PROVIDER=${LLM_PROVIDER}"
+    fi
+    
+    if [ -z "$LLM_API_KEY" ]; then
+        check_fail "LLM_API_KEY 未配置（必需，请在 .env.secrets 中配置）"
+    else
+        check_pass "LLM_API_KEY 已配置"
+    fi
+    
+    # 检查任务类型对应的模型配置（可选）
+    LLM_MODEL_CLASSIFICATION=$(grep -E "^LLM_MODEL_CLASSIFICATION=" "$DEPLOY_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+    LLM_MODEL_IMAGE_EDIT=$(grep -E "^LLM_MODEL_IMAGE_EDIT=" "$DEPLOY_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+    
+    if [ -n "$LLM_MODEL_CLASSIFICATION" ]; then
+        check_pass "LLM_MODEL_CLASSIFICATION=${LLM_MODEL_CLASSIFICATION}"
+    else
+        check_warn "LLM_MODEL_CLASSIFICATION 未配置（将使用提供商默认模型）"
+    fi
+    
+    if [ -n "$LLM_MODEL_IMAGE_EDIT" ]; then
+        check_pass "LLM_MODEL_IMAGE_EDIT=${LLM_MODEL_IMAGE_EDIT}"
+    else
+        check_warn "LLM_MODEL_IMAGE_EDIT 未配置（将使用提供商默认模型）"
+    fi
+fi
+
+# 5.2. 检查七牛云配置（可选，仅警告）
+if [ -f "$DEPLOY_DIR/.env" ] && [ -f "$DEPLOY_DIR/.env.secrets" ]; then
+    echo -e "${BLUE}[5.2/10] 检查七牛云配置（可选）...${NC}"
+    QINIU_BUCKET=$(grep -E "^QINIU_BUCKET_NAME=" "$DEPLOY_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+    QINIU_DOMAIN=$(grep -E "^QINIU_DOMAIN=" "$DEPLOY_DIR/.env" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+    QINIU_ACCESS_KEY=$(grep -E "^QINIU_ACCESS_KEY=" "$DEPLOY_DIR/.env.secrets" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+    QINIU_SECRET_KEY=$(grep -E "^QINIU_SECRET_KEY=" "$DEPLOY_DIR/.env.secrets" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'" | xargs)
+    
+    if [ -n "$QINIU_BUCKET" ] && [ -n "$QINIU_DOMAIN" ] && [ -n "$QINIU_ACCESS_KEY" ] && [ -n "$QINIU_SECRET_KEY" ]; then
+        check_pass "七牛云配置完整（图像编辑结果将上传到CDN）"
+    elif [ -z "$QINIU_BUCKET" ] && [ -z "$QINIU_DOMAIN" ] && [ -z "$QINIU_ACCESS_KEY" ] && [ -z "$QINIU_SECRET_KEY" ]; then
+        check_warn "七牛云未配置（图像编辑结果将使用临时URL，24小时有效）"
+    else
+        check_warn "七牛云配置不完整（部分配置缺失，图像编辑功能可能受影响）"
+        echo "  已配置: BUCKET_NAME=${QINIU_BUCKET:-未设置}, DOMAIN=${QINIU_DOMAIN:-未设置}"
+        echo "  已配置: ACCESS_KEY=${QINIU_ACCESS_KEY:+已设置}, SECRET_KEY=${QINIU_SECRET_KEY:+已设置}"
+    fi
+fi
+
 # 6. 检查版本目录结构
 echo -e "${BLUE}[6/10] 检查版本目录结构...${NC}"
 if [ -d "$DEPLOY_DIR/versions" ]; then
@@ -137,7 +191,7 @@ else
 fi
 
 # 7. 检查 current 符号链接
-echo -e "${BLUE}[7/10] 检查 current 符号链接...${NC}"
+echo -e "${BLUE}[7/11] 检查 current 符号链接...${NC}"
 if [ -L "$DEPLOY_DIR/current" ]; then
     CURRENT_TARGET=$(readlink -f "$DEPLOY_DIR/current" 2>/dev/null || echo "unknown")
     check_pass "current 符号链接存在"
@@ -152,7 +206,7 @@ else
 fi
 
 # 8. 检查 Systemd 服务
-echo -e "${BLUE}[8/10] 检查 Systemd 服务...${NC}"
+echo -e "${BLUE}[8/11] 检查 Systemd 服务...${NC}"
 if systemctl list-unit-files | grep -q "image-classifier.service"; then
     check_pass "image-classifier 服务已配置"
     if systemctl is-enabled image-classifier &> /dev/null; then
@@ -170,7 +224,7 @@ else
 fi
 
 # 9. 检查磁盘空间
-echo -e "${BLUE}[9/10] 检查磁盘空间...${NC}"
+echo -e "${BLUE}[9/11] 检查磁盘空间...${NC}"
 if [ -d "$DEPLOY_DIR" ]; then
     AVAILABLE=$(df -h "$DEPLOY_DIR" | tail -n 1 | awk '{print $4}')
     USED=$(df -h "$DEPLOY_DIR" | tail -n 1 | awk '{print $3}')
@@ -188,7 +242,7 @@ if [ -d "$DEPLOY_DIR" ]; then
 fi
 
 # 10. 检查必要的命令工具
-echo -e "${BLUE}[10/10] 检查必要的命令工具...${NC}"
+echo -e "${BLUE}[10/11] 检查必要的命令工具...${NC}"
 TOOLS=("git" "pip" "gunicorn")
 for tool in "${TOOLS[@]}"; do
     if command -v "$tool" &> /dev/null; then

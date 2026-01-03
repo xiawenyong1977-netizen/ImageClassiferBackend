@@ -1,0 +1,49 @@
+[Unit]
+Description=Image Classifier Backend API Service
+Documentation=https://github.com/xiawenyong1977-netizen/ImageClassiferBackend
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=notify
+User=root
+Group=root
+WorkingDirectory=/opt/ICBackend/current
+Environment="PATH=/opt/ICBackend/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+# 加载环境变量文件（如果存在）
+EnvironmentFile=-/opt/ICBackend/.env
+EnvironmentFile=-/opt/ICBackend/.env.secrets
+
+# 使用 gunicorn 启动应用
+ExecStart=/opt/ICBackend/venv/bin/gunicorn -c gunicorn_config.py app.main:app
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# 资源限制
+LimitNOFILE=65535
+LimitNPROC=4096
+
+# 安全设置
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/image-classifier /var/run/image-classifier.pid
+NoNewPrivileges=true
+
+# 重启策略
+Restart=on-failure
+RestartSec=10s
+StartLimitInterval=300
+StartLimitBurst=5
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=image-classifier
+
+[Install]
+WantedBy=multi-user.target
+

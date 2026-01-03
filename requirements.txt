@@ -52,6 +52,9 @@ passlib[bcrypt]==1.7.4            # 密码哈希
 httpx==0.26.0
 aiofiles==23.2.1
 
+# 七牛云存储SDK
+qiniu==7.17.0
+
 # 测试工具（可选）
 pytest==7.4.4
 pytest-asyncio==0.23.3

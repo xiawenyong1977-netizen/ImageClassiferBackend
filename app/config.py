@@ -25,20 +25,82 @@ class Settings(BaseSettings):
     MYSQL_MAX_OVERFLOW: int = Field(default=5, description="最大溢出连接数")
     
     # ===== 大模型配置 =====
-    LLM_PROVIDER: str = Field(default="openai", description="大模型提供商")
+    LLM_PROVIDER: str = Field(default="aliyun", description="大模型提供商（aliyun/openai/claude/deepseek）")
     LLM_API_KEY: str = Field(default="", description="大模型API密钥")
-    LLM_MODEL: str = Field(default="gpt-4-vision-preview", description="模型名称")
-    LLM_MAX_TOKENS: int = Field(default=500, description="最大token数")
-    LLM_TIMEOUT: int = Field(default=30, description="请求超时(秒)")
-    LLM_MAX_RETRIES: int = Field(default=3, description="最大重试次数")
-    LLM_RETRY_DELAY: float = Field(default=1.0, description="重试延迟(秒)")
+    
+    # 任务类型对应的模型配置（系统会根据任务类型自动选择对应的模型）
+    # 支持的模型列表请参考 app/services/llm/model_config.py
+    LLM_MODEL_CLASSIFICATION: Optional[str] = Field(
+        default=None, 
+        description="图像分类任务使用的模型（可选，如果不指定则使用提供商默认模型）"
+    )
+    LLM_MODEL_IMAGE_EDIT: Optional[str] = Field(
+        default=None, 
+        description="图像编辑任务使用的模型（可选，如果不指定则使用提供商默认模型，仅阿里云支持）"
+    )
+    
+    # 任务类型对应的参数配置（如果不指定，系统会根据模型自动选择默认值）
+    # 支持的参数请参考 app/services/llm/model_config.py 中的 MODEL_DEFAULT_PARAMS
+    LLM_MAX_TOKENS_CLASSIFICATION: Optional[int] = Field(
+        default=None, 
+        description="图像分类任务的最大token数（可选，如果不指定则使用模型默认值）"
+    )
+    LLM_TIMEOUT_CLASSIFICATION: Optional[int] = Field(
+        default=None, 
+        description="图像分类任务的请求超时(秒)（可选，如果不指定则使用模型默认值）"
+    )
+    LLM_MAX_RETRIES_CLASSIFICATION: Optional[int] = Field(
+        default=None, 
+        description="图像分类任务的最大重试次数（可选，如果不指定则使用模型默认值）"
+    )
+    LLM_RETRY_DELAY_CLASSIFICATION: Optional[float] = Field(
+        default=None, 
+        description="图像分类任务的重试延迟(秒)（可选，如果不指定则使用模型默认值）"
+    )
+    
+    LLM_MAX_TOKENS_IMAGE_EDIT: Optional[int] = Field(
+        default=None, 
+        description="图像编辑任务的最大token数（可选，如果不指定则使用模型默认值）"
+    )
+    LLM_TIMEOUT_IMAGE_EDIT: Optional[int] = Field(
+        default=None, 
+        description="图像编辑任务的请求超时(秒)（可选，如果不指定则使用模型默认值，图像编辑通常需要60秒）"
+    )
+    LLM_MAX_RETRIES_IMAGE_EDIT: Optional[int] = Field(
+        default=None, 
+        description="图像编辑任务的最大重试次数（可选，如果不指定则使用模型默认值）"
+    )
+    LLM_RETRY_DELAY_IMAGE_EDIT: Optional[float] = Field(
+        default=None, 
+        description="图像编辑任务的重试延迟(秒)（可选，如果不指定则使用模型默认值）"
+    )
+    
+    @field_validator(
+        'LLM_MAX_TOKENS_CLASSIFICATION', 'LLM_TIMEOUT_CLASSIFICATION', 'LLM_MAX_RETRIES_CLASSIFICATION',
+        'LLM_MAX_TOKENS_IMAGE_EDIT', 'LLM_TIMEOUT_IMAGE_EDIT', 'LLM_MAX_RETRIES_IMAGE_EDIT',
+        mode='before'
+    )
+    @classmethod
+    def parse_optional_int(cls, v):
+        """将空字符串转换为 None"""
+        if v == '' or v is None:
+            return None
+        return int(v) if isinstance(v, str) else v
+    
+    @field_validator('LLM_RETRY_DELAY_CLASSIFICATION', 'LLM_RETRY_DELAY_IMAGE_EDIT', mode='before')
+    @classmethod
+    def parse_optional_float(cls, v):
+        """将空字符串转换为 None"""
+        if v == '' or v is None:
+            return None
+        return float(v) if isinstance(v, str) else v
     
     # Deepseek API密钥（用于文本生成功能，如果未配置则使用LLM_API_KEY）
     DEEPSEEK_API_KEY: Optional[str] = Field(default=None, description="Deepseek API密钥（可选，用于文本生成功能）")
     
     # ===== 本地推理配置 =====
     USE_LOCAL_INFERENCE: bool = Field(default=False, description="是否使用本地推理（开启后不调用大模型）")
-    LOCAL_INFERENCE_FALLBACK: bool = Field(default=True, description="大模型失败时是否降级到本地推理")
+    LOCAL_INFERENCE_FALLBACK: bool = Field(default=False, description="大模型失败时是否降级到本地推理")
     
     # ===== 应用配置 =====
     APP_HOST: str = Field(default="0.0.0.0", description="应用主机")
@@ -236,13 +298,13 @@ class Settings(BaseSettings):
     CREDITS_AMOUNTS_TEST: str = Field(default="1;5;10;50;100", description="测试额度套餐数量列表（用分号分隔）")
     
     # 正式价格配置（待启用）
-    MEMBER_PRICE_PROD: float = Field(default=29.90, description="会员正式价格(元)")
-    CREDITS_PRICE_PROD: float = Field(default=9.90, description="额度正式价格(元)")
+    MEMBER_PRICE_PROD: float = Field(default=9.90, description="会员正式价格(元)")
+    CREDITS_PRICE_PROD: float = Field(default=1.0, description="额度正式价格(元)")
     CREDITS_AMOUNT_PROD: int = Field(default=10, description="正式额度数量（默认值，已废弃，使用CREDITS_AMOUNTS_PROD）")
     CREDITS_AMOUNTS_PROD: str = Field(default="10;20;50;100", description="正式额度套餐数量列表（用分号分隔）")
     
     # 价格模式切换
-    USE_TEST_PRICE: bool = Field(default=True, description="是否使用测试价格")
+    USE_TEST_PRICE: bool = Field(default=False, description="是否使用测试价格")
     
     # ===== 微信配置 =====
     WECHAT_APPID: str = Field(default="", description="微信AppID")
@@ -262,6 +324,12 @@ class Settings(BaseSettings):
         default="https://api.aifuture.net.cn",
         description="图像编辑结果图片的基础URL（新服务器域名）"
     )
+    
+    # ===== 七牛云配置 =====
+    QINIU_ACCESS_KEY: str = Field(default="", description="七牛云Access Key")
+    QINIU_SECRET_KEY: str = Field(default="", description="七牛云Secret Key")
+    QINIU_BUCKET_NAME: str = Field(default="", description="七牛云存储空间名称")
+    QINIU_DOMAIN: str = Field(default="", description="七牛云CDN域名（如：https://cdn.example.com）")
     
     # ===== 地理位置API配置 =====
     GAODE_API_KEY: str = Field(default="", description="高德地图API密钥")

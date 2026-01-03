@@ -584,8 +584,21 @@ class TestLLMService:
             model="qwen-vl-plus"
         )
         
+        # Mock AliyunProvider 的创建，确保新创建的适配器也能被 mock
+        # 使用 importlib 确保正确导入模块
+        import importlib
+        llm_service_module = importlib.import_module('app.services.llm.llm_service')
         with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
+             patch.object(llm_service_module, 'AliyunProvider') as mock_provider_class, \
              patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+            
+            # 设置 mock_provider_class 返回的实例的 call_with_retry 方法
+            mock_new_adapter = MagicMock()
+            mock_new_adapter.call_with_retry = AsyncMock(return_value={
+                "success": True,
+                "result_url": "https://example.com/result.jpg"
+            })
+            mock_provider_class.return_value = mock_new_adapter
             
             mock_cache.return_value = None  # 缓存未命中
             mock_call.return_value = {
@@ -602,8 +615,9 @@ class TestLLMService:
             
             assert result["success"] is True
             assert result["result_url"] == "https://example.com/result.jpg"
-            mock_call.assert_called_once()
-            call_kwargs = mock_call.call_args[1]
+            # 验证新适配器的 call_with_retry 被调用
+            mock_new_adapter.call_with_retry.assert_called_once()
+            call_kwargs = mock_new_adapter.call_with_retry.call_args[1]
             assert call_kwargs["task_type"] == "image_edit"
             assert call_kwargs["prompt"] == "edit prompt"
             assert call_kwargs["edit_type"] == "enhance"
@@ -671,35 +685,28 @@ class TestLLMService:
         import sys
         llm_service_module = sys.modules['app.services.llm.llm_service']
         
-        with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
-             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
-            # 临时替换logger
-            original_logger = llm_service_module.logger
-            llm_service_module.logger = mock_logger
-            
-            try:
-                mock_cache.return_value = None  # 缓存未命中
-                mock_call.return_value = {
-                    "success": True,
-                    "result_url": "https://example.com/result.jpg"
-                }
-                
-                # 使用不同的模型（OpenAI不支持动态指定模型，应该记录警告）
-                result = await service.edit_image(
+        # 临时替换logger
+        original_logger = llm_service_module.logger
+        llm_service_module.logger = mock_logger
+        
+        try:
+            # OpenAI不支持图像编辑任务，应该抛出异常
+            with pytest.raises(ValueError, match="提供商 openai 不支持图像编辑任务"):
+                await service.edit_image(
                     image_bytes=b"test_image",
                     prompt="edit prompt",
                     model="different-model",
                     use_cache=True
                 )
-                
-                # 验证记录了警告（因为OpenAI不支持动态指定模型）
-                mock_logger.warning.assert_called_once()
-                warning_call = mock_logger.warning.call_args[0][0]
-                assert "不支持动态指定模型" in warning_call or "提供商" in warning_call
-                mock_call.assert_called_once()
-            finally:
-                # 恢复原始的logger
-                llm_service_module.logger = original_logger
+            
+            # 验证记录了警告（模型验证警告）
+            assert mock_logger.warning.call_count >= 1
+            warning_calls = [call[0][0] for call in mock_logger.warning.call_args_list]
+            # 应该有一个警告包含"模型验证警告"
+            assert any("模型验证警告" in msg or "模型" in msg for msg in warning_calls)
+        finally:
+            # 恢复原始的logger
+            llm_service_module.logger = original_logger
 
 
 class TestLLMServiceCache:
@@ -1009,15 +1016,22 @@ class TestLLMServiceCache:
         prompt = "edit prompt"
         edit_type = "enhance"
         
+        # Mock AliyunProvider 的创建，确保新创建的适配器也能被 mock
+        import importlib
+        llm_service_module = importlib.import_module('app.services.llm.llm_service')
         with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
              patch.object(unified_llm_cache, 'save_result', new_callable=AsyncMock) as mock_save, \
-             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+             patch.object(llm_service_module, 'AliyunProvider') as mock_provider_class:
             
-            mock_cache.return_value = None
-            mock_call.return_value = {
+            # 设置 mock_provider_class 返回的实例的 call_with_retry 方法
+            mock_new_adapter = MagicMock()
+            mock_new_adapter.call_with_retry = AsyncMock(return_value={
                 "success": True,
                 "result_url": "https://example.com/result.jpg"
-            }
+            })
+            mock_provider_class.return_value = mock_new_adapter
+            
+            mock_cache.return_value = None
             
             result = await service.edit_image(
                 image_bytes=image_bytes,
@@ -1029,7 +1043,7 @@ class TestLLMServiceCache:
             assert result["success"] is True
             assert result.get("from_cache") != True  # 不是来自缓存（可能没有这个字段或为False）
             # 验证调用了API
-            mock_call.assert_called_once()
+            mock_new_adapter.call_with_retry.assert_called_once()
             # 验证保存了缓存
             mock_save.assert_called_once()
             call_args = mock_save.call_args
@@ -1075,13 +1089,19 @@ class TestLLMServiceCache:
         image_bytes = b"test_image_data"
         prompt = "edit prompt"
         
+        # Mock AliyunProvider 的创建，确保新创建的适配器也能被 mock
+        import importlib
+        llm_service_module = importlib.import_module('app.services.llm.llm_service')
         with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
-             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+             patch.object(llm_service_module, 'AliyunProvider') as mock_provider_class:
             
-            mock_call.return_value = {
+            # 设置 mock_provider_class 返回的实例的 call_with_retry 方法
+            mock_new_adapter = MagicMock()
+            mock_new_adapter.call_with_retry = AsyncMock(return_value={
                 "success": True,
                 "result_url": "https://example.com/result.jpg"
-            }
+            })
+            mock_provider_class.return_value = mock_new_adapter
             
             result = await service.edit_image(
                 image_bytes=image_bytes,
@@ -1093,7 +1113,7 @@ class TestLLMServiceCache:
             # 验证没有查询缓存
             mock_cache.assert_not_called()
             # 验证直接调用了API
-            mock_call.assert_called_once()
+            mock_new_adapter.call_with_retry.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_classify_color_cache_hit(self):
@@ -1690,12 +1710,19 @@ class TestLLMServiceErrorHandling:
             user_message="输入参数有误，请检查图片格式和内容"
         )
         
+        # Mock AliyunProvider 的创建，确保新创建的适配器也能被 mock
+        import importlib
+        llm_service_module = importlib.import_module('app.services.llm.llm_service')
         with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
              patch.object(unified_llm_cache, 'save_error_result', new_callable=AsyncMock) as mock_save_error, \
-             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+             patch.object(llm_service_module, 'AliyunProvider') as mock_provider_class:
+            
+            # 设置 mock_provider_class 返回的实例的 call_with_retry 方法
+            mock_new_adapter = MagicMock()
+            mock_new_adapter.call_with_retry = AsyncMock(side_effect=input_error)
+            mock_provider_class.return_value = mock_new_adapter
             
             mock_cache.return_value = None
-            mock_call.side_effect = input_error
             
             result = await service.edit_image(
                 image_bytes=image_bytes,
@@ -1733,11 +1760,18 @@ class TestLLMServiceErrorHandling:
             user_message="服务暂时不可用，请稍后重试"
         )
         
+        # Mock AliyunProvider 的创建，确保新创建的适配器也能被 mock
+        import importlib
+        llm_service_module = importlib.import_module('app.services.llm.llm_service')
         with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
-             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+             patch.object(llm_service_module, 'AliyunProvider') as mock_provider_class:
+            
+            # 设置 mock_provider_class 返回的实例的 call_with_retry 方法
+            mock_new_adapter = MagicMock()
+            mock_new_adapter.call_with_retry = AsyncMock(side_effect=auth_error)
+            mock_provider_class.return_value = mock_new_adapter
             
             mock_cache.return_value = None
-            mock_call.side_effect = auth_error
             
             result = await service.edit_image(
                 image_bytes=image_bytes,
@@ -1762,15 +1796,22 @@ class TestLLMServiceErrorHandling:
         prompt = "edit prompt"
         edit_type = "enhance"
         
+        # Mock AliyunProvider 的创建，确保新创建的适配器也能被 mock
+        import importlib
+        llm_service_module = importlib.import_module('app.services.llm.llm_service')
         with patch.object(unified_llm_cache, 'get_cached_result', new_callable=AsyncMock) as mock_cache, \
              patch.object(unified_llm_cache, 'save_result', new_callable=AsyncMock) as mock_save, \
-             patch.object(service._adapter, 'call_with_retry', new_callable=AsyncMock) as mock_call:
+             patch.object(llm_service_module, 'AliyunProvider') as mock_provider_class:
             
-            mock_cache.return_value = None
-            mock_call.return_value = {
+            # 设置 mock_provider_class 返回的实例的 call_with_retry 方法
+            mock_new_adapter = MagicMock()
+            mock_new_adapter.call_with_retry = AsyncMock(return_value={
                 "success": True,
                 "result_url": "https://example.com/result.jpg"
-            }
+            })
+            mock_provider_class.return_value = mock_new_adapter
+            
+            mock_cache.return_value = None
             
             await service.edit_image(
                 image_bytes=image_bytes,

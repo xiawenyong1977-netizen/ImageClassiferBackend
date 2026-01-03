@@ -12,6 +12,10 @@ from loguru import logger
 from app.config import settings
 from app.services.llm.providers import AliyunProvider, OpenAIProvider, ClaudeProvider, DeepseekProvider
 from app.services.llm.base_service import LLMError, LLMErrorType
+from app.services.llm.model_config import (
+    TaskType, Provider, get_default_model, is_model_supported, validate_model_for_task,
+    get_model_default_params
+)
 from app.services.unified_llm_cache import unified_llm_cache
 from app.utils.hash_utils import HashUtils
 
@@ -126,10 +130,43 @@ class LLMService:
         """
         self.provider = provider or settings.LLM_PROVIDER
         self.api_key = api_key or settings.LLM_API_KEY
-        self.model = model or settings.LLM_MODEL
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
-        self.timeout = timeout
+        
+        # 验证 provider 是否有效
+        try:
+            Provider(self.provider.lower())
+        except ValueError:
+            raise ValueError(f"不支持的大模型提供商: {self.provider}")
+        
+        # 🔥 使用分类任务的默认模型
+        # 优先级：1. 传入的model参数 2. LLM_MODEL_CLASSIFICATION配置 3. 提供商默认模型
+        if model:
+            self.model = model
+        elif settings.LLM_MODEL_CLASSIFICATION:
+            self.model = settings.LLM_MODEL_CLASSIFICATION
+        else:
+            # 使用提供商默认的分类模型
+            default_model = get_default_model(self.provider, TaskType.CLASSIFICATION)
+            if not default_model:
+                raise ValueError(f"提供商 {self.provider} 不支持图像分类任务")
+            self.model = default_model
+        # 🔥 根据任务类型和模型获取默认参数
+        # 优先级：1. 传入的参数 2. 任务类型对应的配置 3. 模型默认值
+        default_params = get_model_default_params(self.provider, TaskType.CLASSIFICATION, self.model)
+        
+        # 分类任务的参数配置
+        self.max_retries = max_retries or (
+            settings.LLM_MAX_RETRIES_CLASSIFICATION or 
+            default_params["max_retries"]
+        )
+        self.retry_delay = retry_delay or (
+            settings.LLM_RETRY_DELAY_CLASSIFICATION or 
+            default_params["retry_delay"]
+        )
+        self.timeout = timeout or (
+            settings.LLM_TIMEOUT_CLASSIFICATION or 
+            default_params["timeout"]
+        )
+        # max_tokens 在调用时根据任务类型动态获取
         
         # 创建对应的提供商适配器
         self._adapter = self._create_adapter()
@@ -182,15 +219,17 @@ class LLMService:
         image_bytes: bytes,
         prompt: Optional[str] = None,
         use_cache: bool = True,
+        image_hash: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
         调用大模型进行图片分类（带缓存和错误处理）
         
         Args:
-            image_bytes: 图片二进制数据
+            image_bytes: 图片二进制数据（可能是压缩后的）
             prompt: 提示词，None则使用配置的分类提示词
             use_cache: 是否使用缓存（默认True）
+            image_hash: 客户端提供的图片hash（基于原图计算），如果提供则使用，否则基于image_bytes计算
             **kwargs: 其他参数
             
         Returns:
@@ -212,8 +251,10 @@ class LLMService:
         # 判断是否使用默认prompt（默认prompt要求返回JSON格式）
         is_default_prompt = prompt == settings.CLASSIFICATION_PROMPT
         
-        # 计算image_hash
-        image_hash = HashUtils.calculate_sha256(image_bytes)
+        # 使用客户端提供的hash（基于原图），如果没有提供则基于压缩后的图片计算
+        # 注意：由于服务器收到的图片是压缩后的，应该使用客户端提供的原图hash来查询缓存
+        if image_hash is None:
+            image_hash = HashUtils.calculate_sha256(image_bytes)
         
         # 1. 如果启用缓存，先查缓存
         if use_cache:
@@ -256,12 +297,20 @@ class LLMService:
                     result["parsed_result"] = self._parse_classification_response(content, try_parse_json=True)
                 return result
         
-        # 2. 缓存未命中，调用API
+        # 2. 获取分类任务的 max_tokens 参数
+        classification_default_params = get_model_default_params(self.provider, TaskType.CLASSIFICATION, self.model)
+        max_tokens = (
+            settings.LLM_MAX_TOKENS_CLASSIFICATION or 
+            classification_default_params["max_tokens"]
+        )
+        
+        # 3. 缓存未命中，调用API
         try:
             result = await self._adapter.call_with_retry(
                 task_type="classification",
                 image_bytes=image_bytes,
                 prompt=prompt,
+                max_tokens=max_tokens,
                 **kwargs
             )
             
@@ -849,22 +898,63 @@ class LLMService:
               - error_code: 错误代码
             - from_cache: 是否来自缓存
         """
+        logger.info(f"[edit_image] 方法开始执行: image_bytes_size={len(image_bytes)}, prompt={prompt[:50] if prompt else None}...")
+        
         # 计算image_hash
+        logger.info(f"[edit_image] 开始计算image_hash...")
         image_hash = HashUtils.calculate_sha256(image_bytes)
+        logger.info(f"[edit_image] image_hash计算完成: {image_hash[:16]}...")
         
         # 对于编辑服务，prompt需要包含edit_type
         full_prompt = f"{edit_type}:{prompt}" if edit_type else prompt
+        logger.info(f"[edit_image] full_prompt准备完成: {full_prompt[:50]}...")
         
         # 确定使用的模型
-        actual_model = model or self.model
+        # 🔥 根据任务类型自动选择模型
+        # 1. 如果明确指定了模型，使用指定的模型
+        if model:
+            actual_model = model
+            # 验证模型是否支持图像编辑任务
+            try:
+                validate_model_for_task(self.provider, TaskType.IMAGE_EDIT, actual_model)
+            except ValueError as e:
+                logger.warning(f"[edit_image] 模型验证警告: {e}")
+                # 如果模型验证失败，且提供商不支持动态指定模型，使用默认模型
+                provider_lower = self.provider.lower()
+                if provider_lower not in ["aliyun", "qwen"]:
+                    logger.warning(f"提供商 {self.provider} 不支持动态指定模型，使用默认模型")
+                    actual_model = get_default_model(self.provider, TaskType.IMAGE_EDIT)
+                    if not actual_model:
+                        raise ValueError(
+                            f"提供商 {self.provider} 不支持图像编辑任务。"
+                            f"支持的提供商: aliyun"
+                        )
+        else:
+            # 2. 使用配置的模型（如果配置了LLM_MODEL_IMAGE_EDIT）
+            if settings.LLM_MODEL_IMAGE_EDIT:
+                actual_model = settings.LLM_MODEL_IMAGE_EDIT
+                logger.info(f"[edit_image] 使用配置的图像编辑模型: {actual_model}")
+            else:
+                # 3. 使用提供商默认的图像编辑模型
+                actual_model = get_default_model(self.provider, TaskType.IMAGE_EDIT)
+                if not actual_model:
+                    raise ValueError(
+                        f"提供商 {self.provider} 不支持图像编辑任务。"
+                        f"支持的提供商: aliyun"
+                    )
+                logger.info(f"[edit_image] 使用提供商默认图像编辑模型: {actual_model}")
+        
+        logger.info(f"[edit_image] 最终使用模型: {actual_model} (提供商: {self.provider})")
         
         # 1. 如果启用缓存，先查缓存
         if use_cache:
+            logger.info(f"[edit_image] 开始查询缓存: prompt_hash={full_prompt[:20]}..., image_hash={image_hash[:16]}...")
             cached = await unified_llm_cache.get_cached_result(
                 prompt=full_prompt,
                 image_hash=image_hash,
                 model_key=f"{self.provider}:{actual_model}"
             )
+            logger.info(f"[edit_image] 缓存查询完成: cached={'命中' if cached else '未命中'}")
             if cached:
                 logger.info(f"缓存命中: image_hash={image_hash[:16]}...")
                 # 检查是否是错误结果
@@ -891,32 +981,56 @@ class LLMService:
                     "from_cache": True
                 }
         
-        # 2. 如果指定了模型，创建临时适配器
+        # 2. 获取图像编辑任务的参数配置
+        edit_default_params = get_model_default_params(self.provider, TaskType.IMAGE_EDIT, actual_model)
+        edit_max_retries = (
+            settings.LLM_MAX_RETRIES_IMAGE_EDIT or 
+            edit_default_params["max_retries"]
+        )
+        edit_retry_delay = (
+            settings.LLM_RETRY_DELAY_IMAGE_EDIT or 
+            edit_default_params["retry_delay"]
+        )
+        edit_timeout = (
+            settings.LLM_TIMEOUT_IMAGE_EDIT or 
+            edit_default_params["timeout"]
+        )
+        
+        # 3. 确保使用正确的模型创建适配器（图像编辑必须使用 qwen-image-edit）
         adapter = self._adapter
-        if model and model != self.model:
-            # 创建新的适配器实例（使用指定的模型）
-            provider_lower = self.provider.lower()
-            if provider_lower in ["aliyun", "qwen"]:
+        # 🔥 如果实际模型与默认模型不同，或者参数不同，需要创建新的适配器
+        provider_lower = self.provider.lower()
+        if provider_lower in ["aliyun", "qwen"]:
+            if actual_model != self.model or edit_timeout != self.timeout or edit_max_retries != self.max_retries:
+                logger.info(f"[edit_image] 创建新的适配器，使用模型: {actual_model}, timeout={edit_timeout}s, max_retries={edit_max_retries}")
                 adapter = AliyunProvider(
                     provider=self.provider,
                     api_key=self.api_key,
-                    model=model,
-                    max_retries=self.max_retries,
-                    retry_delay=self.retry_delay,
-                    timeout=self.timeout
+                    model=actual_model,  # 使用计算出的实际模型
+                    max_retries=edit_max_retries,
+                    retry_delay=edit_retry_delay,
+                    timeout=edit_timeout
                 )
-            else:
-                logger.warning(f"提供商 {self.provider} 不支持动态指定模型，使用默认模型")
+        # 对于非阿里云提供商，如果模型验证失败，已经在上面处理了，这里不需要再次警告
         
-        # 3. 缓存未命中，调用API
+        # 4. 获取图像编辑任务的 max_tokens 参数
+        edit_max_tokens = (
+            settings.LLM_MAX_TOKENS_IMAGE_EDIT or 
+            edit_default_params["max_tokens"]
+        )
+        
+        # 5. 缓存未命中，调用API
+        logger.info(f"[edit_image] 缓存未命中，开始调用LLM API: provider={self.provider}, model={actual_model}, timeout={edit_timeout}s")
         try:
             result = await adapter.call_with_retry(
                 task_type="image_edit",
                 image_bytes=image_bytes,
                 prompt=prompt,
                 edit_type=edit_type,
+                max_tokens=edit_max_tokens,
                 **kwargs
             )
+            logger.info(f"[edit_image] LLM API调用完成: success={result.get('success') if isinstance(result, dict) else 'unknown'}")
             
             # 4. 如果成功，保存到缓存
             if use_cache and result.get('success'):
@@ -1065,10 +1179,12 @@ class LLMService:
                         f"(尝试 {attempt}/{self.max_retries}, model={adapter.model})"
                     )
                     
+                    # 文本生成任务的默认 max_tokens（2000）
+                    text_gen_max_tokens = max_tokens or 2000
                     result = await adapter._call_text_generation(
                         prompt=prompt,
                         system_prompt=system_prompt,
-                        max_tokens=max_tokens or settings.LLM_MAX_TOKENS,
+                        max_tokens=text_gen_max_tokens,
                         temperature=temperature,
                         **kwargs
                     )
