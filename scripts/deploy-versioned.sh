@@ -52,6 +52,7 @@ cp env.example.secrets "$NEW_VERSION_DIR/" 2>/dev/null || true
 cp -r prompts "$NEW_VERSION_DIR/" 2>/dev/null || true
 cp -r tests "$NEW_VERSION_DIR/" 2>/dev/null || true
 cp -r scripts "$NEW_VERSION_DIR/" 2>/dev/null || true
+cp -r wechat "$NEW_VERSION_DIR/" 2>/dev/null || true
 cp pytest.ini "$NEW_VERSION_DIR/" 2>/dev/null || true
 
 # 转换 shell 脚本的行结束符（CRLF -> LF）

@@ -394,6 +394,9 @@ Sync-Directory -LocalPath "$LOCAL_DIR\tests" -RemotePath "${VERSION_DIR}/tests" 
 # 同步 scripts 目录（用于服务器端脚本和检查工具）
 Sync-Directory -LocalPath "$LOCAL_DIR\scripts" -RemotePath "${VERSION_DIR}/scripts" -Description "scripts/ 目录"
 
+# 同步 wechat 目录（微信公众号前端页面）
+Sync-Directory -LocalPath "$LOCAL_DIR\wechat" -RemotePath "${VERSION_DIR}/wechat" -Description "wechat/ 目录"
+
 # 同步 pytest.ini（如果存在）
 Sync-File -LocalPath "$LOCAL_DIR\pytest.ini" -RemotePath "${VERSION_DIR}/pytest.ini" -Description "pytest.ini"
 
