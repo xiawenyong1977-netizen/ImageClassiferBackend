@@ -48,8 +48,11 @@ cp -r app "$NEW_VERSION_DIR/"
 cp requirements.txt "$NEW_VERSION_DIR/"
 cp gunicorn_config.py "$NEW_VERSION_DIR/" 2>/dev/null || true
 cp env.example "$NEW_VERSION_DIR/" 2>/dev/null || true
+cp env.example.secrets "$NEW_VERSION_DIR/" 2>/dev/null || true
 cp -r prompts "$NEW_VERSION_DIR/" 2>/dev/null || true
 cp -r tests "$NEW_VERSION_DIR/" 2>/dev/null || true
+cp -r scripts "$NEW_VERSION_DIR/" 2>/dev/null || true
+cp pytest.ini "$NEW_VERSION_DIR/" 2>/dev/null || true
 
 # 转换 shell 脚本的行结束符（CRLF -> LF）
 echo "  转换 .sh 文件的行结束符..."
