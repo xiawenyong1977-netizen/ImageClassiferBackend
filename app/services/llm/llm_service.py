@@ -13,7 +13,7 @@ from app.config import settings
 from app.services.llm.providers import AliyunProvider, OpenAIProvider, ClaudeProvider, DeepseekProvider
 from app.services.llm.base_service import LLMError, LLMErrorType
 from app.services.llm.model_config import (
-    TaskType, get_default_model, is_model_supported, validate_model_for_task,
+    TaskType, Provider, get_default_model, is_model_supported, validate_model_for_task,
     get_model_default_params
 )
 from app.services.unified_llm_cache import unified_llm_cache
@@ -130,6 +130,12 @@ class LLMService:
         """
         self.provider = provider or settings.LLM_PROVIDER
         self.api_key = api_key or settings.LLM_API_KEY
+        
+        # 验证 provider 是否有效
+        try:
+            Provider(self.provider.lower())
+        except ValueError:
+            raise ValueError(f"不支持的大模型提供商: {self.provider}")
         
         # 🔥 使用分类任务的默认模型
         # 优先级：1. 传入的model参数 2. LLM_MODEL_CLASSIFICATION配置 3. 提供商默认模型
@@ -913,6 +919,16 @@ class LLMService:
                 validate_model_for_task(self.provider, TaskType.IMAGE_EDIT, actual_model)
             except ValueError as e:
                 logger.warning(f"[edit_image] 模型验证警告: {e}")
+                # 如果模型验证失败，且提供商不支持动态指定模型，使用默认模型
+                provider_lower = self.provider.lower()
+                if provider_lower not in ["aliyun", "qwen"]:
+                    logger.warning(f"提供商 {self.provider} 不支持动态指定模型，使用默认模型")
+                    actual_model = get_default_model(self.provider, TaskType.IMAGE_EDIT)
+                    if not actual_model:
+                        raise ValueError(
+                            f"提供商 {self.provider} 不支持图像编辑任务。"
+                            f"支持的提供商: aliyun"
+                        )
         else:
             # 2. 使用配置的模型（如果配置了LLM_MODEL_IMAGE_EDIT）
             if settings.LLM_MODEL_IMAGE_EDIT:
@@ -983,9 +999,9 @@ class LLMService:
         # 3. 确保使用正确的模型创建适配器（图像编辑必须使用 qwen-image-edit）
         adapter = self._adapter
         # 🔥 如果实际模型与默认模型不同，或者参数不同，需要创建新的适配器
-        if actual_model != self.model or edit_timeout != self.timeout or edit_max_retries != self.max_retries:
-            provider_lower = self.provider.lower()
-            if provider_lower in ["aliyun", "qwen"]:
+        provider_lower = self.provider.lower()
+        if provider_lower in ["aliyun", "qwen"]:
+            if actual_model != self.model or edit_timeout != self.timeout or edit_max_retries != self.max_retries:
                 logger.info(f"[edit_image] 创建新的适配器，使用模型: {actual_model}, timeout={edit_timeout}s, max_retries={edit_max_retries}")
                 adapter = AliyunProvider(
                     provider=self.provider,
@@ -995,8 +1011,7 @@ class LLMService:
                     retry_delay=edit_retry_delay,
                     timeout=edit_timeout
                 )
-            else:
-                logger.warning(f"提供商 {self.provider} 不支持动态指定模型，使用默认模型")
+        # 对于非阿里云提供商，如果模型验证失败，已经在上面处理了，这里不需要再次警告
         
         # 4. 获取图像编辑任务的 max_tokens 参数
         edit_max_tokens = (
