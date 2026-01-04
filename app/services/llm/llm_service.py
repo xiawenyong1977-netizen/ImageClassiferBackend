@@ -1295,7 +1295,18 @@ class LLMService:
                 "service_type": "classification" | "image_edit" | ...
             }
         """
+        # 临时调试：这3张图片的 image_hash
+        DEBUG_IMAGE_HASHES = {
+            '5a3e8f23af6c9e214e6dcf56aca55da74a8332679446fc1cee77046b1bd9f81f',
+            'dafbb388bacb41cd9c24ce6381f79d8d6cc195a83c42367b3317691150d42536',
+            '5d12eec8e838ab831f45e897cfea5d743c0446c8ada39fe6df9d5f0c2bd54406'
+        }
+        is_debug = image_hash in DEBUG_IMAGE_HASHES
+        
         model_key = f"{self.provider}:{self.model}"
+        if is_debug:
+            logger.info(f"[DEBUG] check_cache开始: image_hash={image_hash[:16]}..., model_key={model_key}, prompt长度={len(prompt)}")
+        
         cached = await unified_llm_cache.get_cached_result(
             prompt=prompt,
             image_hash=image_hash,
@@ -1303,7 +1314,12 @@ class LLMService:
         )
         
         if not cached:
+            if is_debug:
+                logger.warning(f"[DEBUG] 缓存未命中: image_hash={image_hash[:16]}..., model_key={model_key}")
             return None
+        
+        if is_debug:
+            logger.info(f"[DEBUG] 缓存命中: image_hash={image_hash[:16]}..., cached类型={type(cached).__name__}, cached.keys()={list(cached.keys()) if isinstance(cached, dict) else 'N/A'}")
         
         # 检查是否是错误结果
         if cached.get('status') == 'error':
@@ -1318,9 +1334,29 @@ class LLMService:
         service_type = cached.get('service_type', 'classification')
         # 处理result字段：可能是字符串（新格式）或dict（旧格式兼容）
         cached_result_data = cached.get('result', {})
+        
+        if is_debug:
+            logger.info(f"[DEBUG] cached_result_data: 类型={type(cached_result_data).__name__}, 值={cached_result_data}")
+            if isinstance(cached_result_data, dict):
+                logger.info(f"[DEBUG] cached_result_data.keys()={list(cached_result_data.keys())}")
+        
+        # 检查result是否已经是解析好的分类结果字典（包含category, confidence等字段）
+        is_already_parsed = (
+            isinstance(cached_result_data, dict) and 
+            'category' in cached_result_data and 
+            'confidence' in cached_result_data
+        )
+        
+        if is_debug:
+            logger.info(f"[DEBUG] is_already_parsed={is_already_parsed}, isinstance={isinstance(cached_result_data, dict)}, has_category={'category' in cached_result_data if isinstance(cached_result_data, dict) else False}, has_confidence={'confidence' in cached_result_data if isinstance(cached_result_data, dict) else False}")
+        
         if isinstance(cached_result_data, dict):
-            # 旧格式兼容：dict中包含content字段
-            raw_content = cached_result_data.get('content')
+            if is_already_parsed:
+                # result已经是解析好的分类结果，直接使用
+                raw_content = None  # 不需要原始内容
+            else:
+                # 旧格式兼容：dict中包含content字段
+                raw_content = cached_result_data.get('content')
         else:
             # 新格式：result就是原始内容字符串
             raw_content = cached_result_data
@@ -1338,10 +1374,25 @@ class LLMService:
         if service_type == "classification":
             # 分类服务：使用缓存中的标记，如果没有则回退到字符串比较
             is_default_prompt = cached_is_default_prompt if cached_is_default_prompt is not None else (prompt == settings.CLASSIFICATION_PROMPT)
-            if is_default_prompt and raw_content:
+            
+            if is_debug:
+                logger.info(f"[DEBUG] classification处理: cached_is_default_prompt={cached_is_default_prompt}, is_default_prompt={is_default_prompt}, prompt匹配={prompt == settings.CLASSIFICATION_PROMPT}")
+                logger.info(f"[DEBUG] 执行分支: is_already_parsed={is_already_parsed}, is_default_prompt={is_default_prompt}, raw_content={raw_content is not None if raw_content else False}")
+            
+            if is_already_parsed:
+                # result已经是解析好的分类结果，直接使用
+                result["parsed_result"] = cached_result_data
+                if is_debug:
+                    logger.info(f"[DEBUG] 使用已解析结果: parsed_result={cached_result_data}")
+            elif is_default_prompt and raw_content:
                 # 默认prompt：解析JSON
                 result["parsed_result"] = self._parse_classification_response(raw_content, try_parse_json=True)
-            # 自定义prompt：不解析，返回原始内容（parsed_result为None）
+                if is_debug:
+                    logger.info(f"[DEBUG] 解析JSON结果: parsed_result={result.get('parsed_result')}")
+            else:
+                # 自定义prompt：不解析，返回原始内容（parsed_result为None）
+                if is_debug:
+                    logger.warning(f"[DEBUG] parsed_result未设置: is_already_parsed={is_already_parsed}, is_default_prompt={is_default_prompt}, raw_content={raw_content is not None if raw_content else False}")
         elif service_type == "image_edit":
             # 图像编辑服务：result就是URL字符串，不需要解析
             result["result_url"] = raw_content
@@ -1377,6 +1428,9 @@ class LLMService:
                 # 默认prompt：解析JSON（面相预测返回的是JSON格式）
                 result["parsed_result"] = self._parse_classification_response(raw_content, try_parse_json=True)
             # 自定义prompt：不解析，返回原始内容
+        
+        if is_debug:
+            logger.info(f"[DEBUG] check_cache返回: result.keys()={list(result.keys())}, parsed_result存在={'parsed_result' in result}, parsed_result={result.get('parsed_result')}")
         
         return result
     
