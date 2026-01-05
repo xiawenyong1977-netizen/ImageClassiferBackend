@@ -174,7 +174,10 @@ async def query_local_db(latitude: float, longitude: float, max_distance_km: flo
             row = await cursor.fetchone()
         
         if row:
-            return dict(row)
+            result = dict(row)
+            logger.debug(f"本地数据库查询成功: 坐标=({latitude}, {longitude}), 找到城市={result.get('name_en')}, 距离={result.get('distance_km', 0):.2f}km")
+            return result
+        logger.debug(f"本地数据库查询未命中: 坐标=({latitude}, {longitude}), 3km内无城市")
         return None
         
     except Exception as e:
@@ -296,6 +299,140 @@ async def save_city_to_db(city_data: dict) -> Optional[int]:
     except Exception as e:
         logger.error(f"保存城市信息到数据库失败: {e}")
         return None
+
+
+def validate_and_normalize_location(
+    city_data: dict,
+    latitude: float,
+    longitude: float
+) -> Optional[dict]:
+    """
+    验证和规范化位置信息
+    
+    判定规则：
+    1. name_en：优先使用原始 name_en（如果有），否则用 name_zh 填充，都没有则为 "Unknown"
+    2. name_zh：优先使用原始 name_zh（如果有），否则用 name_en 填充，都没有则为 "未知位置"
+    3. country_code：可以按实际返回的，如果没有返回，整个位置信息也回退到未知位置
+    4. province：如果是中国，没有的话，该数据就认为是错误数据，也回退到未知；如果是国外，可以用某个级别的行政区来代替
+    
+    如果 name_en、province、country_code 这三个元素有一个不能确定，这个位置就是未知位置（返回 None）
+    
+    Args:
+        city_data: 城市信息字典
+        latitude: 纬度（用于判断是否在中国）
+        longitude: 经度（用于判断是否在中国）
+        
+    Returns:
+        规范化后的城市信息字典，所有字段都是规范化后的值；如果验证失败返回 None（表示未知位置）
+    """
+    # 判断是否在中国境内
+    is_china = geocoding_client.is_china_location(latitude, longitude)
+    
+    # 1. 规范化 name_en 和 name_zh
+    name_zh = city_data.get("name_zh")
+    name_en = city_data.get("name_en")
+    
+    # 去除空白字符并检查是否为空
+    name_zh_clean = name_zh.strip() if name_zh and name_zh.strip() else None
+    name_en_clean = name_en.strip() if name_en and name_en.strip() else None
+    
+    # name_en：优先使用原始 name_en（如果有），否则用 name_zh 填充，都没有则为 "Unknown"
+    if name_en_clean:
+        normalized_name_en = name_en_clean
+    elif name_zh_clean:
+        normalized_name_en = name_zh_clean
+    else:
+        normalized_name_en = "Unknown"
+    
+    # name_zh：优先使用原始 name_zh（如果有），否则用 name_en 填充，都没有则为 "未知位置"
+    if name_zh_clean:
+        normalized_name_zh = name_zh_clean
+    elif name_en_clean:
+        normalized_name_zh = name_en_clean
+    else:
+        normalized_name_zh = "未知位置"
+    
+    # 2. 规范化 country_code：必须有效（2位字符）
+    country_code = city_data.get("country_code")
+    if not country_code or len(str(country_code).strip()) != 2:
+        # 如果没有有效的国家代码，尝试根据坐标判断
+        if is_china:
+            normalized_country_code = "CN"
+        else:
+            # 海外坐标但无法确定国家代码，视为未知位置
+            logger.warning(f"位置信息验证失败：无法确定国家代码，坐标=({latitude}, {longitude}), city_data={city_data}")
+            return None
+    else:
+        normalized_country_code = str(country_code).strip().upper()
+    
+    # 3. 规范化 province：根据国家代码判断要求
+    province = city_data.get("province")
+    
+    if normalized_country_code == "CN":
+        # 中国坐标：province 是必填的，如果没有则视为错误数据
+        if not province or not str(province).strip():
+            logger.warning(f"位置信息验证失败：中国坐标缺少省份信息，坐标=({latitude}, {longitude}), city_data={city_data}")
+            return None
+        normalized_province = str(province).strip()
+    else:
+        # 海外坐标：可以用 state 或 region 代替 province
+        if not province or not str(province).strip():
+            # 尝试从其他字段获取行政区信息
+            province = (
+                city_data.get("state") or
+                city_data.get("region") or
+                city_data.get("admin1_code") or
+                None
+            )
+            if province:
+                normalized_province = str(province).strip()
+            else:
+                # 海外坐标如果完全没有行政区信息，也视为未知位置
+                logger.warning(f"位置信息验证失败：海外坐标缺少行政区信息，坐标=({latitude}, {longitude}), country_code={normalized_country_code}, city_data={city_data}")
+                return None
+        else:
+            normalized_province = str(province).strip()
+    
+    # 4. 验证通过，返回规范化后的数据（所有字段都是规范化后的值）
+    normalized_data = city_data.copy()
+    normalized_data["name_en"] = normalized_name_en  # 规范化后的值
+    normalized_data["name_zh"] = normalized_name_zh  # 规范化后的值
+    normalized_data["country_code"] = normalized_country_code  # 规范化后的值
+    normalized_data["province"] = normalized_province  # 规范化后的值
+    
+    return normalized_data
+
+
+def create_unknown_location(latitude: float, longitude: float) -> CityInfoV2:
+    """
+    创建未知位置的默认 CityInfoV2 对象
+    
+    Args:
+        latitude: 纬度
+        longitude: 经度
+        
+    Returns:
+        未知位置的 CityInfoV2 对象
+    """
+    return CityInfoV2(
+        id=0,
+        name_en="Unknown",
+        name_zh="未知位置",
+        latitude=latitude,
+        longitude=longitude,
+        country_code="UN",
+        admin1_code=None,
+        admin2_code=None,
+        province="Unknown",
+        city=None,
+        district=None,
+        data_source="unknown",
+        geoname_id=None,
+        population=None,
+        distance_km=0.0,
+        api_city_id=None,
+        api_adcode=None
+    )
 
 
 async def query_fallback_v1(latitude: float, longitude: float) -> Optional[dict]:
@@ -543,11 +680,14 @@ async def query_fallback_v1(latitude: float, longitude: float) -> Optional[dict]
                 "data_source": "fallback",
                 "admin1_code": None,
                 "admin2_code": None,
-                "province": None,
+                "province": None,  # v1表没有province字段
                 "city": None,
                 "district": None,
                 "api_city_id": None,
-                "api_adcode": None
+                "api_adcode": None,
+                # 添加这些字段用于海外坐标的province替代
+                "state": None,  # 海外坐标可能用到
+                "region": None  # 海外坐标可能用到
             }
         return None
         
@@ -575,28 +715,44 @@ async def query_single_coordinate(coord: Coordinate) -> CityQueryResult:
         city_data = await query_local_db(latitude, longitude, max_distance_km=3.0)
         
         if city_data:
-            logger.debug(f"本地数据库命中: ({latitude}, {longitude}) -> {city_data.get('name_en')}")
-            # 本地数据库命中
+            # 本地数据库命中，验证和规范化位置信息
+            normalized_data = validate_and_normalize_location(city_data, latitude, longitude)
+            
+            if not normalized_data:
+                # 验证失败，返回未知位置
+                logger.warning(f"本地数据库命中但位置信息不完整，返回未知位置: 坐标=({latitude}, {longitude})")
+                query_time_ms = int((time.time() - start_time) * 1000)
+                return CityQueryResult(
+                    location_id=coord.id,
+                    coordinate=coord,
+                    city=create_unknown_location(latitude, longitude),
+                    success=True,  # 仍然返回成功，但位置是未知的
+                    error=None,
+                    data_source="local",
+                    query_time_ms=query_time_ms
+                )
+            
+            # 验证通过，使用规范化后的数据
             query_time_ms = int((time.time() - start_time) * 1000)
             
             city_info = CityInfoV2(
-                id=city_data["id"],
-                name_en=city_data["name_en"],
-                name_zh=city_data.get("name_zh"),
-                latitude=float(city_data["latitude"]),
-                longitude=float(city_data["longitude"]),
-                country_code=city_data["country_code"],
-                admin1_code=city_data.get("admin1_code"),
-                admin2_code=city_data.get("admin2_code"),
-                province=city_data.get("province"),
-                city=city_data.get("city"),
-                district=city_data.get("district"),
-                data_source=city_data.get("data_source", "local"),
-                geoname_id=city_data.get("geoname_id"),
-                population=city_data.get("population"),
-                distance_km=float(city_data.get("distance_km", 0)),
-                api_city_id=str(city_data["api_city_id"]) if city_data.get("api_city_id") else None,
-                api_adcode=city_data.get("api_adcode")
+                id=normalized_data["id"],
+                name_en=normalized_data["name_en"],  # 已规范化
+                name_zh=normalized_data.get("name_zh"),  # 已规范化
+                latitude=float(normalized_data["latitude"]),
+                longitude=float(normalized_data["longitude"]),
+                country_code=normalized_data["country_code"],  # 已规范化
+                admin1_code=normalized_data.get("admin1_code"),
+                admin2_code=normalized_data.get("admin2_code"),
+                province=normalized_data["province"],  # 已规范化
+                city=normalized_data.get("city"),
+                district=normalized_data.get("district"),
+                data_source=normalized_data.get("data_source", "local"),
+                geoname_id=normalized_data.get("geoname_id"),
+                population=normalized_data.get("population"),
+                distance_km=float(normalized_data.get("distance_km", 0)),
+                api_city_id=str(normalized_data["api_city_id"]) if normalized_data.get("api_city_id") else None,
+                api_adcode=normalized_data.get("api_adcode")
             )
             
             return CityQueryResult(
@@ -621,29 +777,29 @@ async def query_single_coordinate(coord: Coordinate) -> CityQueryResult:
             if is_china:
                 # 中国坐标：使用高德API
                 api_provider = "gaode"
-                logger.debug(f"本地数据库未命中，调用高德API: ({latitude}, {longitude})")
+                logger.info(f"本地数据库未命中，调用高德API: 坐标=({latitude}, {longitude})")
                 api_result = await geocoding_client.reverse_geocode_gaode(latitude, longitude)
                 
                 # 记录API调用统计
                 if api_result:
                     await record_api_call(api_provider, success=True)
-                    logger.debug(f"高德API调用成功: ({latitude}, {longitude})")
+                    logger.info(f"高德API调用成功: 坐标=({latitude}, {longitude}), name_zh={api_result.get('name_zh')}, name_en={api_result.get('name_en')}")
                 else:
                     await record_api_call(api_provider, success=False)
-                    logger.warning(f"高德API调用失败（中国坐标）: ({latitude}, {longitude})")
+                    logger.warning(f"高德API调用失败（中国坐标）: 坐标=({latitude}, {longitude})")
             else:
                 # 海外坐标：使用Nominatim API（通过Cloudflare Worker代理）
                 api_provider = "nominatim"
-                logger.debug(f"本地数据库未命中，调用Nominatim API: ({latitude}, {longitude})")
+                logger.info(f"本地数据库未命中，调用Nominatim API: 坐标=({latitude}, {longitude})")
                 api_result = await geocoding_client.reverse_geocode_nominatim(latitude, longitude)
                 
                 # 记录API调用统计
                 if api_result:
                     await record_api_call(api_provider, success=True)
-                    logger.debug(f"Nominatim API调用成功: ({latitude}, {longitude})")
+                    logger.info(f"Nominatim API调用成功: 坐标=({latitude}, {longitude}), name_en={api_result.get('name_en')}")
                 else:
                     await record_api_call(api_provider, success=False)
-                    logger.warning(f"Nominatim API调用失败，返回None: ({latitude}, {longitude})")
+                    logger.warning(f"Nominatim API调用失败，返回None: 坐标=({latitude}, {longitude})")
         except Exception as api_e:
             api_error = str(api_e)
             logger.error(f"外部API调用异常 ({api_provider}, {latitude}, {longitude}): {api_error}")
@@ -651,105 +807,66 @@ async def query_single_coordinate(coord: Coordinate) -> CityQueryResult:
                 await record_api_call(api_provider, success=False)
         
         if api_result:
-            # 3. 高德API成功，保存到本地数据库
-            # 确保 name_en 有值（高德API应该已经设置了）
-            if not api_result.get("name_en"):
-                api_result["name_en"] = api_result.get("name_zh") or ""
+            # 3. 外部API成功，验证和规范化位置信息
+            normalized_data = validate_and_normalize_location(api_result, latitude, longitude)
             
-            city_id = await save_city_to_db(api_result)
+            if not normalized_data:
+                # 验证失败，返回未知位置
+                logger.warning(f"外部API返回但位置信息不完整，返回未知位置: 坐标=({latitude}, {longitude}), provider={api_provider}")
+                query_time_ms = int((time.time() - start_time) * 1000)
+                return CityQueryResult(
+                    location_id=coord.id,
+                    coordinate=coord,
+                    city=create_unknown_location(latitude, longitude),
+                    success=True,
+                    error=None,
+                    data_source=api_provider or "unknown",
+                    query_time_ms=query_time_ms
+                )
+            
+            # 验证通过，保存到本地数据库（使用原始数据，保持数据真实可靠）
+            city_id = await save_city_to_db(api_result)  # 保存原始数据
             
             if city_id:
-                api_result["id"] = city_id
+                normalized_data["id"] = city_id
             
             # 计算距离
             distance_km = haversine_distance(
                 latitude, longitude,
-                api_result["latitude"], api_result["longitude"]
+                normalized_data["latitude"], normalized_data["longitude"]
             )
             
             query_time_ms = int((time.time() - start_time) * 1000)
             
-            # 确保 name_en 不为空（必填字段）
-            name_en = api_result.get("name_en") or api_result.get("name_zh") or ""
-            if not name_en:
-                logger.warning(f"API返回数据缺少name_en和name_zh: {api_result}")
-                # 如果缺少名称，降级到v1查询
-                fallback_data = await query_fallback_v1(latitude, longitude)
-                if fallback_data:
-                    # 使用v1降级查询的结果
-                    query_time_ms = int((time.time() - start_time) * 1000)
-                    city_info = CityInfoV2(
-                        id=fallback_data["id"],
-                        name_en=fallback_data["name_en"],
-                        name_zh=fallback_data.get("name_zh"),
-                        latitude=fallback_data["latitude"],
-                        longitude=fallback_data["longitude"],
-                        country_code=fallback_data["country_code"],
-                        admin1_code=fallback_data.get("admin1_code"),
-                        admin2_code=fallback_data.get("admin2_code"),
-                        province=fallback_data.get("province"),
-                        city=fallback_data.get("city"),
-                        district=fallback_data.get("district"),
-                        data_source="fallback",
-                        geoname_id=fallback_data.get("geoname_id"),
-                        population=fallback_data.get("population"),
-                        distance_km=fallback_data["distance_km"],
-                        api_city_id=fallback_data.get("api_city_id"),
-                        api_adcode=fallback_data.get("api_adcode")
-                    )
-                    return CityQueryResult(
-                        location_id=coord.id,
-                        coordinate=coord,
-                        city=city_info,
-                        success=True,
-                        error=None,
-                        data_source="fallback",
-                        query_time_ms=query_time_ms
-                    )
-                else:
-                    # v1降级也失败，返回错误
-                    query_time_ms = int((time.time() - start_time) * 1000)
-                    error_msg = f"未找到任何城市数据 (高德API返回数据缺少名称, v1降级查询也失败)"
-                    logger.warning(f"所有查询都失败: ({latitude}, {longitude}), location_id={coord.id}, {error_msg}")
-                    return CityQueryResult(
-                        location_id=coord.id,
-                        coordinate=coord,
-                        city=None,
-                        success=False,
-                        error=error_msg,
-                        data_source="fallback",
-                        query_time_ms=query_time_ms
-                    )
-            
             # 确保 api_adcode 是字符串或 None
-            api_adcode = api_result.get("api_adcode")
+            api_adcode = normalized_data.get("api_adcode")
             if isinstance(api_adcode, list):
                 api_adcode = api_adcode[0] if api_adcode else None
             if api_adcode:
                 api_adcode = str(api_adcode)
             
             # 确保 api_city_id 是字符串或 None
-            api_city_id = api_result.get("api_city_id")
+            api_city_id = normalized_data.get("api_city_id")
             if isinstance(api_city_id, list):
                 api_city_id = api_city_id[0] if api_city_id else None
             if api_city_id:
                 api_city_id = str(api_city_id)
             
             city_info = CityInfoV2(
-                id=api_result.get("id", 0),
-                name_en=name_en,
-                name_zh=api_result.get("name_zh"),
-                latitude=api_result["latitude"],
-                longitude=api_result["longitude"],
-                country_code=api_result.get("country_code", "UN"),
-                admin1_code=api_result.get("admin1_code"),
-                admin2_code=api_result.get("admin2_code"),
-                province=api_result.get("province"),
-                city=api_result.get("city"),
-                district=api_result.get("district"),
-                data_source=api_result.get("data_source", api_provider),
-                geoname_id=api_result.get("geoname_id"),
-                population=api_result.get("population"),
+                id=normalized_data.get("id", 0),
+                name_en=normalized_data["name_en"],  # 已规范化
+                name_zh=normalized_data.get("name_zh"),  # 已规范化
+                latitude=normalized_data["latitude"],
+                longitude=normalized_data["longitude"],
+                country_code=normalized_data["country_code"],  # 已规范化
+                admin1_code=normalized_data.get("admin1_code"),
+                admin2_code=normalized_data.get("admin2_code"),
+                province=normalized_data["province"],  # 已规范化
+                city=normalized_data.get("city"),
+                district=normalized_data.get("district"),
+                data_source=normalized_data.get("data_source", api_provider),
+                geoname_id=normalized_data.get("geoname_id"),
+                population=normalized_data.get("population"),
                 distance_km=distance_km,
                 api_city_id=api_city_id,
                 api_adcode=api_adcode
@@ -772,27 +889,45 @@ async def query_single_coordinate(coord: Coordinate) -> CityQueryResult:
         fallback_data = await query_fallback_v1(latitude, longitude)
         
         if fallback_data:
-            logger.debug(f"v1降级查询成功: ({latitude}, {longitude}) -> {fallback_data.get('name_en')}")
+            # 验证和规范化 fallback 数据
+            normalized_data = validate_and_normalize_location(fallback_data, latitude, longitude)
+            
+            if not normalized_data:
+                # 验证失败，返回未知位置
+                logger.warning(f"v1降级查询返回但位置信息不完整，返回未知位置: 坐标=({latitude}, {longitude})")
+                query_time_ms = int((time.time() - start_time) * 1000)
+                return CityQueryResult(
+                    location_id=coord.id,
+                    coordinate=coord,
+                    city=create_unknown_location(latitude, longitude),
+                    success=True,
+                    error=None,
+                    data_source="fallback",
+                    query_time_ms=query_time_ms
+                )
+            
+            # 验证通过
+            logger.debug(f"v1降级查询成功: ({latitude}, {longitude}) -> {normalized_data.get('name_en')}")
             query_time_ms = int((time.time() - start_time) * 1000)
             
             city_info = CityInfoV2(
-                id=fallback_data["id"],
-                name_en=fallback_data["name_en"],
-                name_zh=fallback_data.get("name_zh"),
-                latitude=fallback_data["latitude"],
-                longitude=fallback_data["longitude"],
-                country_code=fallback_data["country_code"],
-                admin1_code=fallback_data.get("admin1_code"),
-                admin2_code=fallback_data.get("admin2_code"),
-                province=fallback_data.get("province"),
-                city=fallback_data.get("city"),
-                district=fallback_data.get("district"),
+                id=normalized_data["id"],
+                name_en=normalized_data["name_en"],  # 已规范化
+                name_zh=normalized_data.get("name_zh"),  # 已规范化
+                latitude=normalized_data["latitude"],
+                longitude=normalized_data["longitude"],
+                country_code=normalized_data["country_code"],  # 已规范化
+                admin1_code=normalized_data.get("admin1_code"),
+                admin2_code=normalized_data.get("admin2_code"),
+                province=normalized_data["province"],  # 已规范化
+                city=normalized_data.get("city"),
+                district=normalized_data.get("district"),
                 data_source="fallback",
-                geoname_id=fallback_data.get("geoname_id"),
-                population=fallback_data.get("population"),
-                distance_km=fallback_data["distance_km"],
-                api_city_id=fallback_data.get("api_city_id"),
-                api_adcode=fallback_data.get("api_adcode")
+                geoname_id=normalized_data.get("geoname_id"),
+                population=normalized_data.get("population"),
+                distance_km=normalized_data["distance_km"],
+                api_city_id=normalized_data.get("api_city_id"),
+                api_adcode=normalized_data.get("api_adcode")
             )
             
             return CityQueryResult(
@@ -805,23 +940,17 @@ async def query_single_coordinate(coord: Coordinate) -> CityQueryResult:
                 query_time_ms=query_time_ms
             )
         
-        # 所有查询都失败
+        # 所有查询都失败，返回未知位置
         query_time_ms = int((time.time() - start_time) * 1000)
-        error_msg = f"未找到任何城市数据 (本地DB未命中"
-        if api_provider:
-            error_msg += f", {api_provider}API失败"
-            if api_error:
-                error_msg += f": {api_error}"
-        error_msg += ", v1降级查询也失败)"
-        logger.warning(f"所有查询都失败: ({latitude}, {longitude}), location_id={coord.id}, {error_msg}")
+        logger.warning(f"所有查询都失败，返回未知位置: ({latitude}, {longitude}), location_id={coord.id}")
         
         return CityQueryResult(
             location_id=coord.id,
             coordinate=coord,
-            city=None,
-            success=False,
-            error=error_msg,
-            data_source="fallback",
+            city=create_unknown_location(latitude, longitude),
+            success=True,  # 返回成功，但位置是未知的
+            error=None,
+            data_source="unknown",
             query_time_ms=query_time_ms
         )
         
@@ -833,10 +962,10 @@ async def query_single_coordinate(coord: Coordinate) -> CityQueryResult:
         return CityQueryResult(
             location_id=coord.id,
             coordinate=coord,
-            city=None,
-            success=False,
-            error=f"查询失败: {str(e)}",
-            data_source=None,
+            city=create_unknown_location(latitude, longitude),  # 异常时也返回未知位置
+            success=True,
+            error=None,
+            data_source="unknown",
             query_time_ms=query_time_ms
         )
 
