@@ -397,16 +397,17 @@ class TestLocationV2ExternalAPI:
     @pytest.mark.integration
     async def test_query_china_location_gaode_api_failed(self, async_client):
         """测试中国坐标高德API失败后降级到v1逻辑（使用真实数据库和真实外部API）"""
-        # 使用一个不太可能存在的坐标（测试API失败场景）
+        # 使用一个中国境内的坐标（确保调用高德API），但使用一个不太可能命中本地数据库的坐标
         # 注意：这个测试依赖于真实API的行为，如果API正常，可能会成功
+        # 使用中国西南地区的一个坐标（30.0, 100.0），确保在中国境内
         response = await async_client.post(
             "/api/v2/location/nearest-cities",
             json={
                 "coordinates": [
                     {
                         "id": "gaode_failed_test",
-                        "latitude": 0.0,  # 使用一个边界坐标
-                        "longitude": 0.0
+                        "latitude": 30.0,  # 中国境内坐标（四川/云南地区）
+                        "longitude": 100.0
                     }
                 ]
             }
@@ -419,9 +420,11 @@ class TestLocationV2ExternalAPI:
         
         # 验证结果（可能成功或失败，取决于真实API的行为）
         # 这个测试主要验证系统在API失败时的处理逻辑
+        # 对于中国坐标，data_source 应该是 local、gaode 或 fallback，不应该是 nominatim
         if result["success"]:
             assert result["city"] is not None
-            assert result["data_source"] in ["local", "gaode", "fallback"]
+            assert result["data_source"] in ["local", "gaode", "fallback"], \
+                f"中国坐标的 data_source 应该是 local/gaode/fallback，实际是: {result['data_source']}"
         else:
             # API失败的情况
             assert result["error"] is not None
