@@ -437,7 +437,8 @@ def create_unknown_location(latitude: float, longitude: float) -> CityInfoV2:
 
 async def query_fallback_v1(latitude: float, longitude: float) -> Optional[dict]:
     """
-    降级到v1逻辑：查询最近的城市（不限制距离）
+    降级查询：查询最近的城市（不限制距离）
+    使用 v2 数据库（global_cities_v2），保留 v1 的查询逻辑（按距离查询）
     
     Args:
         latitude: 纬度
@@ -449,250 +450,181 @@ async def query_fallback_v1(latitude: float, longitude: float) -> Optional[dict]
     try:
         # 判断是否在中国境内
         is_china = geocoding_client.is_china_location(latitude, longitude)
-        logger.debug(f"v1降级查询: 坐标({latitude}, {longitude}), 是否中国: {is_china}")
-        
-        # 按行政级别筛选：优先选择城市级别的feature_code（PPLC, PPLG, PPLA, PPLA2）
-        # 排除太细的行政级别（PPLA3, PPLA4, PPLX）
-        valid_feature_codes = ("PPLC", "PPLG", "PPLA", "PPLA2")
-        excluded_feature_codes = ("PPLA3", "PPLA4", "PPLX")
-        
-        # 构建 IN 子句的占位符（MySQL需要多个%s）
-        valid_placeholders = ",".join(["%s"] * len(valid_feature_codes))
-        excluded_placeholders = ",".join(["%s"] * len(excluded_feature_codes))
-        
-        # 对于中国坐标，优先查询有中文名的城市
-        # 对于海外坐标，不要求中文名（因为海外城市可能没有中文名）
-        if is_china:
-            query = f"""
-                SELECT 
-                    id,
-                    geoname_id,
-                    COALESCE(ascii_name, name) AS name_en,
-                    name_zh,
-                    latitude,
-                    longitude,
-                    country_code,
-                    population,
-                    ST_Distance_Sphere(
-                        POINT(longitude, latitude),
-                        POINT(%s, %s)
-                    ) / 1000 AS distance_km
-                FROM global_cities
-                WHERE feature_code IN ({valid_placeholders})
-                  AND feature_code NOT IN ({excluded_placeholders})
-                  AND name_zh IS NOT NULL
-                ORDER BY distance_km
-                LIMIT 1
-            """
-        else:
-            # 海外坐标：不要求中文名，只要有英文名即可
-            query = f"""
-                SELECT 
-                    id,
-                    geoname_id,
-                    COALESCE(ascii_name, name) AS name_en,
-                    name_zh,
-                    latitude,
-                    longitude,
-                    country_code,
-                    population,
-                    ST_Distance_Sphere(
-                        POINT(longitude, latitude),
-                        POINT(%s, %s)
-                    ) / 1000 AS distance_km
-                FROM global_cities
-                WHERE feature_code IN ({valid_placeholders})
-                  AND feature_code NOT IN ({excluded_placeholders})
-                  AND (COALESCE(ascii_name, name) IS NOT NULL)
-                ORDER BY distance_km
-                LIMIT 1
-            """
+        logger.debug(f"降级查询: 坐标({latitude}, {longitude}), 是否中国: {is_china}")
         
         async with db.get_cursor() as cursor:
-            # 执行查询，传入参数：longitude, latitude, valid_feature_codes, excluded_feature_codes
-            params = (longitude, latitude) + valid_feature_codes + excluded_feature_codes
-            logger.debug(f"v1降级查询第1层: 执行SQL查询，坐标=({latitude}, {longitude}), feature_codes={valid_feature_codes}")
-            await cursor.execute(query, params)
+            # 第1层：优先查询有中文名的城市（中国坐标）或所有城市（海外坐标）
+            if is_china:
+                query = """
+                    SELECT 
+                        gc.id,
+                        gc.name_en,
+                        cnm.name_zh,
+                        gc.latitude,
+                        gc.longitude,
+                        gc.country_code,
+                        gc.admin1_code,
+                        gc.admin2_code,
+                        gc.province,
+                        gc.city,
+                        gc.district,
+                        gc.data_source,
+                        gc.geoname_id,
+                        gc.population,
+                        gc.api_city_id,
+                        gc.api_adcode,
+                        ST_Distance_Sphere(
+                            POINT(gc.longitude, gc.latitude),
+                            POINT(%s, %s)
+                        ) / 1000 AS distance_km
+                    FROM global_cities_v2 gc
+                    LEFT JOIN city_name_mapping cnm ON gc.name_en = cnm.name_en COLLATE utf8mb4_unicode_ci
+                    WHERE cnm.name_zh IS NOT NULL
+                    ORDER BY distance_km
+                    LIMIT 1
+                """
+            else:
+                # 海外坐标：不要求中文名，只要有英文名即可
+                query = """
+                    SELECT 
+                        gc.id,
+                        gc.name_en,
+                        cnm.name_zh,
+                        gc.latitude,
+                        gc.longitude,
+                        gc.country_code,
+                        gc.admin1_code,
+                        gc.admin2_code,
+                        gc.province,
+                        gc.city,
+                        gc.district,
+                        gc.data_source,
+                        gc.geoname_id,
+                        gc.population,
+                        gc.api_city_id,
+                        gc.api_adcode,
+                        ST_Distance_Sphere(
+                            POINT(gc.longitude, gc.latitude),
+                            POINT(%s, %s)
+                        ) / 1000 AS distance_km
+                    FROM global_cities_v2 gc
+                    LEFT JOIN city_name_mapping cnm ON gc.name_en = cnm.name_en COLLATE utf8mb4_unicode_ci
+                    WHERE gc.name_en IS NOT NULL
+                    ORDER BY distance_km
+                    LIMIT 1
+                """
+            
+            logger.debug(f"降级查询第1层: 执行SQL查询，坐标=({latitude}, {longitude}), 是否中国={is_china}")
+            await cursor.execute(query, (longitude, latitude))
             row = await cursor.fetchone()
             
             if row:
-                logger.debug(f"v1降级查询第1层成功: 找到城市 {row.get('name_en')}, 距离={row.get('distance_km')}km")
+                logger.debug(f"降级查询第1层成功: 找到城市 {row.get('name_en')}, 距离={row.get('distance_km')}km")
             else:
-                logger.debug(f"v1降级查询第1层失败: 未找到符合条件的城市")
+                logger.debug(f"降级查询第1层失败: 未找到符合条件的城市")
             
-            # 如果没找到结果，尝试放宽行政级别限制（包含PPLA3，但仍排除PPLA4和PPLX）
-            if not row:
-                logger.debug(f"v1降级查询: 未找到城市级别的地点，尝试放宽行政级别限制...")
-                relaxed_feature_codes = ("PPLC", "PPLG", "PPLA", "PPLA2", "PPLA3")
-                relaxed_excluded = ("PPLA4", "PPLX")
-                relaxed_valid_placeholders = ",".join(["%s"] * len(relaxed_feature_codes))
-                relaxed_excluded_placeholders = ",".join(["%s"] * len(relaxed_excluded))
+            # 第2层：如果第1层没找到（中国坐标且没有中文名），放宽条件查询所有城市
+            if not row and is_china:
+                logger.debug(f"降级查询: 未找到有中文名的城市，尝试查询所有城市...")
+                relaxed_query = """
+                    SELECT 
+                        gc.id,
+                        gc.name_en,
+                        cnm.name_zh,
+                        gc.latitude,
+                        gc.longitude,
+                        gc.country_code,
+                        gc.admin1_code,
+                        gc.admin2_code,
+                        gc.province,
+                        gc.city,
+                        gc.district,
+                        gc.data_source,
+                        gc.geoname_id,
+                        gc.population,
+                        gc.api_city_id,
+                        gc.api_adcode,
+                        ST_Distance_Sphere(
+                            POINT(gc.longitude, gc.latitude),
+                            POINT(%s, %s)
+                        ) / 1000 AS distance_km
+                    FROM global_cities_v2 gc
+                    LEFT JOIN city_name_mapping cnm ON gc.name_en = cnm.name_en COLLATE utf8mb4_unicode_ci
+                    WHERE gc.name_en IS NOT NULL
+                    ORDER BY distance_km
+                    LIMIT 1
+                """
                 
-                if is_china:
-                    relaxed_query = f"""
-                        SELECT 
-                            id,
-                            geoname_id,
-                            COALESCE(ascii_name, name) AS name_en,
-                            name_zh,
-                            latitude,
-                            longitude,
-                            country_code,
-                            population,
-                            ST_Distance_Sphere(
-                                POINT(longitude, latitude),
-                                POINT(%s, %s)
-                            ) / 1000 AS distance_km
-                        FROM global_cities
-                        WHERE feature_code IN ({relaxed_valid_placeholders})
-                          AND feature_code NOT IN ({relaxed_excluded_placeholders})
-                          AND name_zh IS NOT NULL
-                        ORDER BY distance_km
-                        LIMIT 1
-                    """
-                else:
-                    relaxed_query = f"""
-                        SELECT 
-                            id,
-                            geoname_id,
-                            COALESCE(ascii_name, name) AS name_en,
-                            name_zh,
-                            latitude,
-                            longitude,
-                            country_code,
-                            population,
-                            ST_Distance_Sphere(
-                                POINT(longitude, latitude),
-                                POINT(%s, %s)
-                            ) / 1000 AS distance_km
-                        FROM global_cities
-                        WHERE feature_code IN ({relaxed_valid_placeholders})
-                          AND feature_code NOT IN ({relaxed_excluded_placeholders})
-                          AND (COALESCE(ascii_name, name) IS NOT NULL)
-                        ORDER BY distance_km
-                        LIMIT 1
-                    """
-                
-                relaxed_params = (longitude, latitude) + relaxed_feature_codes + relaxed_excluded
-                logger.debug(f"v1降级查询第2层: 执行SQL查询，坐标=({latitude}, {longitude}), feature_codes={relaxed_feature_codes}")
-                await cursor.execute(relaxed_query, relaxed_params)
+                logger.debug(f"降级查询第2层: 执行SQL查询，坐标=({latitude}, {longitude}), 无中文名限制")
+                await cursor.execute(relaxed_query, (longitude, latitude))
                 row = await cursor.fetchone()
                 
                 if row:
-                    logger.debug(f"v1降级查询第2层成功: 找到城市 {row.get('name_en')}, 距离={row.get('distance_km')}km")
+                    logger.debug(f"降级查询第2层成功: 找到城市 {row.get('name_en')}, 距离={row.get('distance_km')}km")
                 else:
-                    logger.debug(f"v1降级查询第2层失败: 未找到符合条件的城市")
-                
-                # 如果还是没找到，完全移除行政级别限制（最后的降级策略）
-                if not row:
-                    logger.debug(f"v1降级查询: 放宽行政级别后仍未找到，尝试移除行政级别限制...")
-                    if is_china:
-                        final_query = """
-                            SELECT 
-                                id,
-                                geoname_id,
-                                COALESCE(ascii_name, name) AS name_en,
-                                name_zh,
-                                latitude,
-                                longitude,
-                                country_code,
-                                population,
-                                ST_Distance_Sphere(
-                                    POINT(longitude, latitude),
-                                    POINT(%s, %s)
-                                ) / 1000 AS distance_km
-                            FROM global_cities
-                            WHERE name_zh IS NOT NULL
-                            ORDER BY distance_km
-                            LIMIT 1
-                        """
-                    else:
-                        final_query = """
-                            SELECT 
-                                id,
-                                geoname_id,
-                                COALESCE(ascii_name, name) AS name_en,
-                                name_zh,
-                                latitude,
-                                longitude,
-                                country_code,
-                                population,
-                                ST_Distance_Sphere(
-                                    POINT(longitude, latitude),
-                                    POINT(%s, %s)
-                                ) / 1000 AS distance_km
-                            FROM global_cities
-                            WHERE COALESCE(ascii_name, name) IS NOT NULL
-                            ORDER BY distance_km
-                            LIMIT 1
-                        """
+                    logger.debug(f"降级查询第2层失败: 未找到符合条件的城市")
                     
-                    logger.debug(f"v1降级查询第3层: 执行SQL查询，坐标=({latitude}, {longitude}), 无feature_code限制")
-                    await cursor.execute(final_query, (longitude, latitude))
-                    row = await cursor.fetchone()
+                    # 检查数据库中是否有任何城市数据（用于诊断）
+                    check_query = "SELECT COUNT(*) as total FROM global_cities_v2 WHERE name_en IS NOT NULL LIMIT 1"
+                    await cursor.execute(check_query)
+                    count_row = await cursor.fetchone()
+                    total_cities = count_row.get("total", 0) if count_row else 0
                     
-                    if row:
-                        logger.debug(f"v1降级查询第3层成功: 找到城市 {row.get('name_en')}, 距离={row.get('distance_km')}km")
+                    logger.warning(f"降级查询: 所有查询策略都失败，坐标({latitude}, {longitude})")
+                    logger.warning(f"数据库诊断: global_cities_v2表中共有 {total_cities} 个城市记录")
+                    
+                    # 尝试查询最近的城市（完全无限制，用于诊断）
+                    diagnostic_query = """
+                        SELECT 
+                            gc.name_en,
+                            gc.latitude,
+                            gc.longitude,
+                            ST_Distance_Sphere(
+                                POINT(gc.longitude, gc.latitude),
+                                POINT(%s, %s)
+                            ) / 1000 AS distance_km
+                        FROM global_cities_v2 gc
+                        WHERE gc.name_en IS NOT NULL
+                        ORDER BY distance_km
+                        LIMIT 5
+                    """
+                    await cursor.execute(diagnostic_query, (longitude, latitude))
+                    nearest_cities = await cursor.fetchall()
+                    if nearest_cities:
+                        city_list = [(c.get('name_en'), f"{c.get('distance_km'):.1f}km") for c in nearest_cities]
+                        logger.warning(f"最近的5个城市: {city_list}")
                     else:
-                        # 检查数据库中是否有任何城市数据（用于诊断）
-                        check_query = "SELECT COUNT(*) as total FROM global_cities WHERE COALESCE(ascii_name, name) IS NOT NULL LIMIT 1"
-                        await cursor.execute(check_query)
-                        count_row = await cursor.fetchone()
-                        total_cities = count_row.get("total", 0) if count_row else 0
-                        
-                        logger.warning(f"v1降级查询: 所有降级策略都失败，坐标({latitude}, {longitude})")
-                        logger.warning(f"数据库诊断: global_cities表中共有 {total_cities} 个城市记录")
-                        
-                        # 尝试查询最近的城市（完全无限制，用于诊断）
-                        diagnostic_query = """
-                            SELECT 
-                                COALESCE(ascii_name, name) AS name_en,
-                                latitude,
-                                longitude,
-                                ST_Distance_Sphere(
-                                    POINT(longitude, latitude),
-                                    POINT(%s, %s)
-                                ) / 1000 AS distance_km
-                            FROM global_cities
-                            WHERE COALESCE(ascii_name, name) IS NOT NULL
-                            ORDER BY distance_km
-                            LIMIT 5
-                        """
-                        await cursor.execute(diagnostic_query, (longitude, latitude))
-                        nearest_cities = await cursor.fetchall()
-                        if nearest_cities:
-                            city_list = [(c.get('name_en'), f"{c.get('distance_km'):.1f}km") for c in nearest_cities]
-                            logger.warning(f"最近的5个城市: {city_list}")
-                        else:
-                            logger.error(f"数据库中没有找到任何城市数据！")
+                        logger.error(f"数据库中没有找到任何城市数据！")
         
         if row:
             return {
                 "id": row["id"],
                 "name_en": row["name_en"],
-                "name_zh": row["name_zh"],
+                "name_zh": row.get("name_zh"),  # 可能为None
                 "latitude": float(row["latitude"]),
                 "longitude": float(row["longitude"]),
                 "country_code": row["country_code"],
-                "geoname_id": row["geoname_id"],
-                "population": row["population"],
+                "geoname_id": row.get("geoname_id"),
+                "population": row.get("population"),
                 "distance_km": float(row["distance_km"]),
-                "data_source": "fallback",
-                "admin1_code": None,
-                "admin2_code": None,
-                "province": None,  # v1表没有province字段
-                "city": None,
-                "district": None,
-                "api_city_id": None,
-                "api_adcode": None,
+                "data_source": row.get("data_source", "fallback"),
+                "admin1_code": row.get("admin1_code"),
+                "admin2_code": row.get("admin2_code"),
+                "province": row.get("province"),  # v2表有province字段
+                "city": row.get("city"),
+                "district": row.get("district"),
+                "api_city_id": row.get("api_city_id"),
+                "api_adcode": row.get("api_adcode"),
                 # 添加这些字段用于海外坐标的province替代
-                "state": None,  # 海外坐标可能用到
-                "region": None  # 海外坐标可能用到
+                "state": row.get("province"),  # 海外坐标可能用到province作为state
+                "region": row.get("admin1_code")  # 海外坐标可能用到admin1_code作为region
             }
         return None
         
     except Exception as e:
-        logger.error(f"v1降级查询失败: {e}")
+        logger.error(f"降级查询失败: {e}")
+        import traceback
+        logger.error(f"错误堆栈: {traceback.format_exc()}")
         return None
 
 
@@ -778,7 +710,12 @@ async def query_single_coordinate(coord: Coordinate) -> CityQueryResult:
                 # 中国坐标：使用高德API
                 api_provider = "gaode"
                 logger.info(f"本地数据库未命中，调用高德API: 坐标=({latitude}, {longitude})")
-                api_result = await geocoding_client.reverse_geocode_gaode(latitude, longitude)
+                try:
+                    api_result = await geocoding_client.reverse_geocode_gaode(latitude, longitude)
+                except Exception as gaode_e:
+                    api_error = str(gaode_e)
+                    logger.error(f"高德API调用异常: 坐标=({latitude}, {longitude}), 错误={api_error}")
+                    api_result = None
                 
                 # 记录API调用统计
                 if api_result:
@@ -786,7 +723,7 @@ async def query_single_coordinate(coord: Coordinate) -> CityQueryResult:
                     logger.info(f"高德API调用成功: 坐标=({latitude}, {longitude}), name_zh={api_result.get('name_zh')}, name_en={api_result.get('name_en')}")
                 else:
                     await record_api_call(api_provider, success=False)
-                    logger.warning(f"高德API调用失败（中国坐标）: 坐标=({latitude}, {longitude})")
+                    logger.warning(f"高德API调用失败，返回None: 坐标=({latitude}, {longitude}), 可能原因: 1) API返回错误状态 2) 无城市名称 3) 请求超时 4) HTTP错误")
             else:
                 # 海外坐标：使用Nominatim API（通过Cloudflare Worker代理）
                 api_provider = "nominatim"

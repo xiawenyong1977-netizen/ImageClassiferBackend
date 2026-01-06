@@ -17,8 +17,11 @@
 #   .\deploy.ps1 -Force -Incremental # 增量部署，跳过确认
 # 
 # 增量部署说明：
-# - 使用 git diff 检测变更的文件（需要项目是 git 仓库）
-# - 只同步变更的文件和目录，加快部署速度
+# - 检测工作区变更文件（需要项目是 git 仓库）
+#   * 未跟踪的新文件
+#   * 工作区中已修改但未提交的文件
+# - 只同步工作区未提交的修改，加快部署速度
+# - 已提交但未 push 的文件不会自动部署（需要先 push 后再部署）
 # - requirements.txt 等重要文件总是同步（即使未变更）
 # - 如果不是 git 仓库，会自动回退到全量部署
 # =====================================================
@@ -40,7 +43,7 @@ Write-Host "服务器: $SERVER" -ForegroundColor Yellow
 Write-Host "目标目录: $REMOTE_DIR" -ForegroundColor Yellow
 Write-Host "本地目录: $LOCAL_DIR" -ForegroundColor Yellow
 if ($Incremental) {
-    Write-Host "部署模式: 增量部署（只同步修改的文件）" -ForegroundColor Cyan
+    Write-Host "部署模式: 增量部署（只同步工作区未提交的修改）" -ForegroundColor Cyan
 } else {
     Write-Host "部署模式: 全量部署" -ForegroundColor Cyan
 }
@@ -100,22 +103,43 @@ if ($Incremental) {
     Pop-Location
     
     if ($isGitRepo) {
-        Write-Host "  检测 git 变更文件..." -ForegroundColor Cyan
+        Write-Host "  检测工作区变更文件（未提交的修改）..." -ForegroundColor Cyan
         Push-Location $LOCAL_DIR
-        # 获取相对于仓库根目录的变更文件列表（包括新增、修改、删除）
-        $gitChanged = git diff --name-only HEAD 2>$null
+        
+        # 1. 检测未跟踪的文件（新文件，从未 push）
         $gitUntracked = git ls-files --others --exclude-standard 2>$null
         
-        if ($gitChanged) {
-            $changedFiles += $gitChanged -split "`n" | Where-Object { $_ -and $_.Trim() }
-        }
+        # 2. 检测工作区中已修改但未提交的文件
+        $gitWorktreeChanged = git diff --name-only HEAD 2>$null
+        
+        # 3. 合并工作区变更文件（只检测未提交的修改，不检测已提交但未 push 的文件）
+        $allChangedFiles = @()
+        
         if ($gitUntracked) {
-            $changedFiles += $gitUntracked -split "`n" | Where-Object { $_ -and $_.Trim() }
+            # 未跟踪的文件都是新文件，需要部署
+            $allChangedFiles += $gitUntracked -split "`n" | Where-Object { $_ -and $_.Trim() }
         }
+        
+        if ($gitWorktreeChanged) {
+            # 工作区变更的文件（未提交的修改），需要部署
+            $allChangedFiles += $gitWorktreeChanged -split "`n" | Where-Object { $_ -and $_.Trim() }
+        }
+        
+        # 去重
+        $changedFiles = $allChangedFiles | Select-Object -Unique
+        
         Pop-Location
         
         if ($changedFiles.Count -gt 0) {
-            Write-Host "  发现 $($changedFiles.Count) 个变更文件" -ForegroundColor Cyan
+            Write-Host "  发现 $($changedFiles.Count) 个工作区变更文件（未提交的修改）" -ForegroundColor Cyan
+            if ($gitUntracked) {
+                $untrackedCount = ($gitUntracked -split "`n" | Where-Object { $_ -and $_.Trim() }).Count
+                Write-Host "    - 未跟踪文件（新文件）: $untrackedCount 个文件" -ForegroundColor Gray
+            }
+            if ($gitWorktreeChanged) {
+                $worktreeCount = ($gitWorktreeChanged -split "`n" | Where-Object { $_ -and $_.Trim() }).Count
+                Write-Host "    - 已修改未提交: $worktreeCount 个文件" -ForegroundColor Gray
+            }
             # 统一路径分隔符为 Unix 风格（/）
             $changedFiles = $changedFiles | ForEach-Object { $_.Replace("\", "/") }
             
@@ -147,7 +171,8 @@ if ($Incremental) {
                 Write-Host "  需要同步的目录: $($changedDirs -join ', ')" -ForegroundColor Cyan
             }
         } else {
-            Write-Host "  未发现变更文件，将跳过文件同步" -ForegroundColor Yellow
+            Write-Host "  未发现工作区变更文件，将跳过文件同步" -ForegroundColor Yellow
+            Write-Host "    (提示: 已提交但未 push 的文件不会自动部署，需要手动 push 后再部署)" -ForegroundColor DarkGray
         }
     } else {
         Write-Host "  警告: 当前目录不是 git 仓库，增量部署需要 git 支持" -ForegroundColor Yellow

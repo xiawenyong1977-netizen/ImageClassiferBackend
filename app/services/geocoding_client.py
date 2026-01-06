@@ -160,22 +160,25 @@ class GeocodingClient:
                         # 记录详细的错误信息
                         status = data.get("status")
                         info = data.get("info", "未知错误")
-                        logger.warning(f"高德API返回错误: status={status}, info={info}, 坐标=({latitude}, {longitude})")
+                        logger.warning(f"高德API返回错误: status={status}, info={info}, 坐标=({latitude}, {longitude}), 完整响应={data}")
                         
                         # 如果是海外坐标，这是正常的（高德API主要支持中国境内）
                         if status == "0":
-                            logger.debug(f"高德API不支持该坐标（可能是海外坐标）: ({latitude}, {longitude})")
+                            logger.info(f"高德API不支持该坐标（可能是海外坐标或API错误）: ({latitude}, {longitude}), info={info}")
+                        else:
+                            logger.warning(f"高德API返回非成功状态: status={status}, info={info}, 坐标=({latitude}, {longitude})")
                         
                         return None
                             
             except httpx.TimeoutException:
-                logger.error("高德API请求超时")
+                logger.error(f"高德API请求超时: 坐标=({latitude}, {longitude}), 超时限制=5.0秒")
                 return None
             except httpx.HTTPStatusError as e:
-                logger.error(f"高德API HTTP错误: {e.response.status_code}")
+                logger.error(f"高德API HTTP错误: 坐标=({latitude}, {longitude}), 状态码={e.response.status_code}, 响应={e.response.text[:200]}")
                 return None
             except Exception as e:
-                logger.error(f"高德API调用失败: {e}")
+                import traceback
+                logger.error(f"高德API调用失败: 坐标=({latitude}, {longitude}), 错误={e}, 堆栈={traceback.format_exc()}")
                 return None
     
     async def reverse_geocode_nominatim(self, latitude: float, longitude: float) -> Optional[Dict[str, Any]]:
