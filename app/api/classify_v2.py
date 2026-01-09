@@ -556,12 +556,15 @@ async def batch_classify_v2(
         failed_count = total_count - success_count
         cached_count = sum(1 for r in results if r.get('inference_method') == 'cache')
         llm_count = sum(1 for r in results if not r.get('error') and r.get('inference_method') == 'llm')
+        # 二维码检测计入 local_count（因为不需要调用LLM，类似本地推理）
+        qrcode_count = sum(1 for r in results if not r.get('error') and r.get('inference_method') == 'qrcode_detection')
+        local_count = qrcode_count  # v2版本只有二维码检测算作本地处理
         total_time_ms = int((time.time() - batch_start_time) * 1000)
         
         RequestLogger.log_step(
             batch_request_id,
             "summary",
-            f"统计完成: 总数={total_count}, 成功={success_count}, 失败={failed_count}, 缓存={cached_count}, LLM={llm_count}",
+            f"统计完成: 总数={total_count}, 成功={success_count}, 失败={failed_count}, 缓存={cached_count}, LLM={llm_count}, 二维码={qrcode_count}",
             user_id=user_id
         )
         
@@ -577,7 +580,7 @@ async def batch_classify_v2(
                 total_images=success_count,  # 用户实际成功分类的图片张数
                 cached_count=cached_count,
                 llm_count=llm_count,
-                local_count=0  # v2版本不使用本地推理
+                local_count=local_count  # v2版本：二维码检测计入local_count
             )
         except Exception as e:
             RequestLogger.log_error(batch_request_id, e, "/api/v2/classify/batch", user_id, "stats_log_failed")

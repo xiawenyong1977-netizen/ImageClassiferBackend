@@ -511,19 +511,9 @@ async def batch_edit_v2(
         )
         RequestLogger.log_step(request_id, "submit_task", f"任务提交成功: task_id={task_id}", user_id=user_id)
         
-        # 8. 记录统计日志
-        RequestLogger.log_step(request_id, "log_stats", "记录统计日志", user_id=user_id)
-        try:
-            await stats_service.log_unified_request(
-                request_id=request_id,
-                request_type="batch_image_edit",
-                total_images=len(image_data_list),
-                client_id=user_id,
-                openid=openid,
-                ip_address=ip_address
-            )
-        except Exception as e:
-            RequestLogger.log_error(request_id, e, "/api/v2/image-edit/batch", user_id, "stats_log_failed")
+        # 8. 注意：不在这里记录统计日志
+        # 统计日志会在任务完成时记录（_process_task_async_v2函数中，request_type='image_edit'）
+        # 这样可以避免重复记录，因为统计时只统计 image_edit（任务完成时的记录）
         
         response = BatchImageEditSubmitResponseV2(
             error_type=InternalErrorType.SUCCESS,

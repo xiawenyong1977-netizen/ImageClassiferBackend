@@ -200,19 +200,27 @@ class StatsService:
                             log.ip_address
                         )) as unique_users,
                         
-                        -- 图片分类统计（包括单个分类、批量分类、单个缓存查询、批量缓存查询）
-                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify', 'single_cache', 'batch_cache') THEN total_images ELSE 0 END) as classify_total,
+                        -- 图片分类统计（包括V1和V2版本：单个分类、批量分类、单个缓存查询、批量缓存查询）
+                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify', 'batch_classify_v2', 'single_cache', 'batch_cache', 'batch_cache_v2') THEN total_images ELSE 0 END) as classify_total,
                         -- 缓存命中数：包括分类请求中的缓存命中 + 缓存查询请求中的缓存命中
                         -- 注意：batch_cache 和 single_cache 的 cached_count 必须被统计
                         SUM(CASE 
-                            WHEN request_type IN ('single_classify', 'batch_classify', 'single_cache', 'batch_cache') 
+                            WHEN request_type IN ('single_classify', 'batch_classify', 'batch_classify_v2', 'single_cache', 'batch_cache', 'batch_cache_v2') 
                             THEN COALESCE(cached_count, 0) 
                             ELSE 0 
                         END) as classify_cached,
-                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify') THEN COALESCE(llm_count, 0) ELSE 0 END) as classify_llm,
-                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify') THEN COALESCE(local_count, 0) ELSE 0 END) as classify_local,
+                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify', 'batch_classify_v2') THEN COALESCE(llm_count, 0) ELSE 0 END) as classify_llm,
+                        SUM(CASE WHEN request_type IN ('single_classify', 'batch_classify', 'batch_classify_v2') THEN COALESCE(local_count, 0) ELSE 0 END) as classify_local,
                         
-                        -- 图像编辑统计
+                        -- 图像编辑统计（包括V1和V2版本）
+                        -- V1版本：只记录 image_edit（任务完成时）
+                        -- V2版本：记录两次
+                        --   - batch_image_edit（提交时）：记录用户提交的请求数，cached_count和llm_count为0
+                        --   - image_edit（完成时）：记录实际处理的数据，包含准确的缓存和LLM数据
+                        -- 统计策略：
+                        --   为了避免V2版本的重复计算（同一个任务会记录batch_image_edit和image_edit），
+                        --   只统计 image_edit（V1和V2版本都会在任务完成时记录，包含准确的统计信息）
+                        --   这样既能覆盖所有版本，又能避免重复计算
                         SUM(CASE WHEN request_type = 'image_edit' THEN total_images ELSE 0 END) as edit_total,
                         SUM(CASE WHEN request_type = 'image_edit' THEN COALESCE(cached_count, 0) ELSE 0 END) as edit_cached,
                         SUM(CASE WHEN request_type = 'image_edit' THEN COALESCE(llm_count, 0) ELSE 0 END) as edit_llm
@@ -228,7 +236,18 @@ class StatsService:
                 """)
                 result = await cursor.fetchone()
                 
-                # 调试：查询各类型的详细统计
+                # 添加详细的调试日志
+                logger.info(f"📊 主查询结果: result={result}")
+                logger.info(f"📊 result 是否为 None: {result is None}")
+                if result:
+                    logger.info(f"📊 result 类型: {type(result)}")
+                    logger.info(f"📊 result.keys(): {list(result.keys()) if isinstance(result, dict) else 'N/A'}")
+                    logger.info(f"📊 unique_ips 原始值: {result.get('unique_ips')}, 类型: {type(result.get('unique_ips'))}")
+                    logger.info(f"📊 classify_total 原始值: {result.get('classify_total')}, 类型: {type(result.get('classify_total'))}")
+                    logger.info(f"📊 classify_cached 原始值: {result.get('classify_cached')}, 类型: {type(result.get('classify_cached'))}")
+                    logger.info(f"📊 classify_llm 原始值: {result.get('classify_llm')}, 类型: {type(result.get('classify_llm'))}")
+                
+                # 调试：查询各类型的详细统计（包含V2类型）
                 await cursor.execute("""
                     SELECT 
                         request_type,
@@ -240,11 +259,27 @@ class StatsService:
                         SUM(total_images) - SUM(COALESCE(cached_count, 0)) - SUM(COALESCE(llm_count, 0)) - SUM(COALESCE(local_count, 0)) as diff
                     FROM unified_request_log
                     WHERE created_date = CURDATE()
-                      AND request_type IN ('single_classify', 'batch_classify', 'single_cache', 'batch_cache')
+                      AND request_type IN ('single_classify', 'batch_classify', 'batch_classify_v2', 'single_cache', 'batch_cache', 'batch_cache_v2')
                     GROUP BY request_type
                 """)
                 detail_stats = await cursor.fetchall()
                 logger.info(f"📊 今日分类统计详情（按类型）: {detail_stats}")
+                
+                # 调试：查询图像编辑统计详情
+                await cursor.execute("""
+                    SELECT 
+                        request_type,
+                        COUNT(*) as request_count,
+                        SUM(total_images) as total_images,
+                        SUM(COALESCE(cached_count, 0)) as cached_count,
+                        SUM(COALESCE(llm_count, 0)) as llm_count
+                    FROM unified_request_log
+                    WHERE created_date = CURDATE()
+                      AND request_type IN ('image_edit', 'batch_image_edit')
+                    GROUP BY request_type
+                """)
+                edit_detail_stats = await cursor.fetchall()
+                logger.info(f"📊 今日图像编辑统计详情（按类型）: {edit_detail_stats}")
                 
                 # 检查数据一致性
                 if detail_stats:
@@ -258,10 +293,11 @@ class StatsService:
                         total_processed = cached + llm + local
                         
                         # 对于分类请求，total应该等于cached+llm+local
-                        if request_type in ('single_classify', 'batch_classify') and total != total_processed:
-                            logger.warning(f"⚠️ {request_type} 数据不一致: total={total}, cached={cached}, llm={llm}, local={local}, 差值={diff}")
+                        # 注意：差值可能是失败的请求或其他inference_method（如error等）
+                        if request_type in ('single_classify', 'batch_classify', 'batch_classify_v2') and total != total_processed:
+                            logger.warning(f"⚠️ {request_type} 数据不一致: total={total}, cached={cached}, llm={llm}, local={local}, 差值={diff} (差值可能是失败的请求或其他inference_method)")
                         # 对于缓存查询，total应该等于cached+miss（miss不会计入llm/local）
-                        elif request_type in ('single_cache', 'batch_cache') and diff != 0:
+                        elif request_type in ('single_cache', 'batch_cache', 'batch_cache_v2') and diff != 0:
                             logger.info(f"ℹ️ {request_type} 未命中数: {diff} (这是正常的，缓存查询未命中不会触发推理)")
                 
                 if result:
@@ -291,7 +327,7 @@ class StatsService:
                         }
                     }
                     
-                    logger.debug(f"今日统计查询结果: {stats}")
+                    logger.info(f"📊 今日统计查询结果（转换后）: {stats}")
                     return stats
                 
                 # 如果没有数据，返回默认值
@@ -331,7 +367,9 @@ class StatsService:
     
     async def get_cache_efficiency(self) -> dict:
         """
-        获取缓存效率统计
+        获取缓存效率统计（V2版本统一缓存）
+        
+        使用 llm_inference_cache_v2 表统计，支持分类和编辑服务的统一缓存
         
         Returns:
             缓存效率数据
@@ -346,7 +384,7 @@ class StatsService:
                     ROUND((COALESCE(SUM(hit_count - 1), 0) * %s), 2) as cost_saved,
                     COALESCE(ROUND(AVG(hit_count), 2), 0) as avg_hit_per_image,
                     COALESCE(MAX(hit_count), 0) as max_hits
-                FROM image_classification_cache
+                FROM llm_inference_cache_v2
                 """
                 await cursor.execute(sql, (settings.COST_PER_API_CALL,))
                 result = await cursor.fetchone()
@@ -399,61 +437,13 @@ class StatsService:
     
     async def get_category_distribution(self) -> list:
         """
-        获取分类分布统计（从缓存表统计，包含所有历史分类结果）
+        获取分类分布统计（暂时返回空数据）
         
         Returns:
-            分类分布列表
+            分类分布列表（空列表）
         """
-        try:
-            async with db.get_cursor() as cursor:
-                # 从 image_classification_cache 表统计，因为那里有完整的分类数据
-                # 统计所有历史数据
-                sql = """
-                SELECT 
-                    category,
-                    COUNT(*) as count,
-                    ROUND(AVG(confidence), 4) as avg_confidence,
-                    ROUND(COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM image_classification_cache), 0), 2) as percentage
-                FROM image_classification_cache
-                GROUP BY category
-                ORDER BY count DESC
-                """
-                await cursor.execute(sql)
-                results = await cursor.fetchall()
-                
-                # 确保所有值都转换为正确的数字类型
-                def to_int(value):
-                    if value is None:
-                        return 0
-                    try:
-                        return int(float(value))
-                    except (ValueError, TypeError):
-                        return 0
-                
-                def to_float(value):
-                    if value is None:
-                        return 0.0
-                    try:
-                        return float(value)
-                    except (ValueError, TypeError):
-                        return 0.0
-                
-                # 转换结果
-                formatted_results = []
-                for row in results:
-                    formatted_results.append({
-                        'category': row.get('category', ''),
-                        'count': to_int(row.get('count')),
-                        'avg_confidence': to_float(row.get('avg_confidence')),
-                        'percentage': to_float(row.get('percentage'))
-                    })
-                
-                logger.debug(f"分类分布统计结果: {formatted_results}")
-                return formatted_results
-                
-        except Exception as e:
-            logger.error(f"查询分类分布失败: {e}", exc_info=True)
-            return []
+        # 暂时返回空数据，后续如果需要可以从 llm_inference_cache_v2 表的 model_results JSON中提取分类结果
+        return []
     
     async def get_inference_method_stats(self) -> dict:
         """
@@ -566,12 +556,12 @@ class StatsService:
                     except (ValueError, TypeError):
                         return 0.0
                 
-                # 每日统计（从 unified_request_log 表，筛选 batch_cache 类型）
+                # 每日统计（从 unified_request_log 表，筛选 batch_cache 和 batch_cache_v2 类型）
                 # 统计指标：独立用户数、独立IP数、请求总数、照片总数、缓存命中总数、命中比例
                 await cursor.execute("""
                     SELECT 
                         created_date,
-                        -- 请求总数（批量缓存查询请求次数）
+                        -- 请求总数（批量缓存查询请求次数，包括V1和V2版本）
                         COUNT(*) as total_requests,
                         -- 独立用户数（基于 client_id，通过绑定表映射到 openid）
                         COUNT(DISTINCT COALESCE(
@@ -593,7 +583,7 @@ class StatsService:
                         FROM wechat_qrcode_bindings
                         WHERE openid IS NOT NULL
                     ) binding ON log.client_id = binding.client_id
-                    WHERE log.request_type = 'batch_cache'
+                    WHERE log.request_type IN ('batch_cache', 'batch_cache_v2')
                       AND log.created_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
                     GROUP BY created_date
                     ORDER BY created_date DESC
@@ -684,12 +674,12 @@ class StatsService:
                     except (ValueError, TypeError):
                         return 0
                 
-                # 每日统计（从 unified_request_log 表，筛选 batch_classify 类型）
+                # 每日统计（从 unified_request_log 表，筛选 batch_classify 和 batch_classify_v2 类型）
                 # 统计指标：请求总数、独立用户数、独立IP数、照片数、缓存数、大模型推理数、本地推理数
                 await cursor.execute("""
                     SELECT 
                         created_date,
-                        -- 请求总数（批量分类请求次数）
+                        -- 请求总数（批量分类请求次数，包括V1和V2版本）
                         COUNT(*) as total_requests,
                         -- 独立用户数（基于 client_id，通过绑定表映射到 openid）
                         COUNT(DISTINCT COALESCE(
@@ -713,7 +703,7 @@ class StatsService:
                         FROM wechat_qrcode_bindings
                         WHERE openid IS NOT NULL
                     ) binding ON log.client_id = binding.client_id
-                    WHERE log.request_type = 'batch_classify'
+                    WHERE log.request_type IN ('batch_classify', 'batch_classify_v2')
                       AND log.created_date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
                     GROUP BY created_date
                     ORDER BY created_date DESC
