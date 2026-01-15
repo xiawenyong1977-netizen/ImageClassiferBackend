@@ -776,7 +776,7 @@ async def create_wechat_menu():
         xintu_url = "https://www.xintuxiangce.top"
         
         # 联系我们URL（不需要授权）
-        contact_url = "https://www.xintuxiangce.top/aifuture.html"
+        contact_url = "https://www.aifuture.net.cn"
         
         menu_data = {
             "button": [
