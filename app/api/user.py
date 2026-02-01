@@ -91,6 +91,7 @@ async def get_user_credits(
                     "total_credits": user['total_credits'],
                     "used_credits": user['used_credits'],
                     "remaining_credits": user['remaining_credits'],
+                    "is_followed": True,  # 用户存在说明已关注公众号
                     "is_member": bool(user['is_member']),
                     "member_expire_at": str(user['member_expire_at']) if user['member_expire_at'] else None
                 }
@@ -113,13 +114,13 @@ async def get_member_status(
     x_wechat_openid: str = Header(None, description="微信openid")
 ):
     """
-    查询用户的会员状态
+    查询用户的会员状态和关注状态
     
     支持两种调用方式：
     1. 通过client_id查询（客户端扫码场景）
     2. 通过openid查询（网页授权场景）
     
-    返回用户是否是会员、会员到期时间等信息
+    返回用户是否已关注公众号、是否是会员、会员到期时间等信息
     """
     try:
         openid = None
@@ -166,8 +167,10 @@ async def get_member_status(
                 if not user:
                     raise HTTPException(status_code=404, detail="用户不存在")
                 
+                # 如果用户存在，说明已经关注了公众号
                 return {
                     "success": True,
+                    "is_followed": True,  # 用户存在说明已关注公众号
                     "is_member": bool(user['is_member']),
                     "member_expire_at": str(user['member_expire_at']) if user['member_expire_at'] else None
                 }

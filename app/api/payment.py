@@ -153,12 +153,13 @@ async def create_order(
             async with db.get_connection() as conn:
                 async with conn.cursor() as cursor:
                     await cursor.execute(
-                        "SELECT is_member, member_expire_at FROM wechat_users WHERE openid = %s",
+                        "SELECT is_member FROM wechat_users WHERE openid = %s",
                         (openid,)
                     )
                     user = await cursor.fetchone()
                     
-                    if user and user[0] and user[1] and user[1] > datetime.now():
+                    # 会员是终身的，只检查是否已经是会员
+                    if user and user[0]:
                         raise HTTPException(status_code=400, detail="您已经是会员，无需重复开通")
         
         # 计算额度数量和订单金额
@@ -283,20 +284,16 @@ async def payment_notify(request: Request):
                 
                 # 处理会员开通
                 if order_type == 'member':
-                    # 更新会员状态（有效期30天），并赠送10个免费额度
-                    expire_at = datetime.now() + timedelta(days=30)
-                    free_credits = 10  # 会员赠送额度
+                    # 更新会员状态（终身会员），不再赠送额度
                     await cursor.execute(
                         """UPDATE wechat_users 
                            SET is_member = 1, 
-                               member_expire_at = %s,
-                               remaining_credits = remaining_credits + %s,
-                               total_credits = total_credits + %s,
+                               member_expire_at = NULL,
                                total_paid_amount = total_paid_amount + %s
                            WHERE openid = %s""",
-                        (expire_at, free_credits, free_credits, total_fee, openid)
+                        (total_fee, openid)
                     )
-                    logger.info(f"会员开通成功: openid={openid[:16]}..., expire_at={expire_at}, 赠送额度={free_credits}")
+                    logger.info(f"会员开通成功: openid={openid[:16]}..., 终身会员")
                 
                 # 处理额度购买
                 elif order_type == 'credits':
