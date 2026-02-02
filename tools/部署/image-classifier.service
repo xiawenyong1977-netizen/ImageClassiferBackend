@@ -11,6 +11,9 @@ Group=root
 WorkingDirectory=/opt/ICBackend/current
 Environment="PATH=/opt/ICBackend/venv/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="PYTHONUNBUFFERED=1"
+# 配置库缓存目录（避免写入只读的 /root/.config）
+Environment="MPLCONFIGDIR=/tmp/matplotlib"
+Environment="ULTRALYTICS_HOME=/tmp/ultralytics"
 # 加载环境变量文件（如果存在）
 EnvironmentFile=-/opt/ICBackend/.env
 EnvironmentFile=-/opt/ICBackend/.env.secrets

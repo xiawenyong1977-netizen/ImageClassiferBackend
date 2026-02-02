@@ -325,6 +325,12 @@ class Settings(BaseSettings):
         description="图像编辑结果图片的基础URL（新服务器域名）"
     )
     
+    # ===== 图像编辑功能配置 =====
+    ALLOW_IMAGE_EDIT_WITHOUT_OPENID: bool = Field(
+        default=False,
+        description="是否允许未关注公众号的用户使用修图功能（开启后不检查额度，不扣减额度）"
+    )
+    
     # ===== 七牛云配置 =====
     QINIU_ACCESS_KEY: str = Field(default="", description="七牛云Access Key")
     QINIU_SECRET_KEY: str = Field(default="", description="七牛云Secret Key")

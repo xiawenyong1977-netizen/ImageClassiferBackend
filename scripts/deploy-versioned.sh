@@ -162,6 +162,9 @@ Group=root
 WorkingDirectory=$DEPLOY_DIR/current
 Environment="PATH=$DEPLOY_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="PYTHONUNBUFFERED=1"
+# 配置库缓存目录（避免写入只读的 /root/.config）
+Environment="MPLCONFIGDIR=/tmp/matplotlib"
+Environment="ULTRALYTICS_HOME=/tmp/ultralytics"
 # 加载环境变量文件（如果存在）
 EnvironmentFile=-$DEPLOY_DIR/.env
 EnvironmentFile=-$DEPLOY_DIR/.env.secrets

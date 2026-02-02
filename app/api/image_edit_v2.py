@@ -32,6 +32,7 @@ from app.utils.hash_utils import HashUtils
 from app.utils.image_utils import ImageUtils
 from app.utils.id_generator import IDGenerator
 from app.utils.request_logger import RequestLogger
+from app.config import settings
 from loguru import logger
 
 # 七牛云服务（可选，如果未安装qiniu包则跳过）
@@ -442,8 +443,9 @@ async def batch_edit_v2(
         RequestLogger.log_step(request_id, "get_user_info", f"获取用户信息: user_id={user_id}")
         openid = await wechat_binding_service.get_openid_by_client_id(user_id) if user_id else None
         
-        # 5. 检查额度（如果提供了 openid）
+        # 5. 检查额度
         if openid:
+            # 有 openid：检查正式额度
             RequestLogger.log_step(request_id, "check_credit", f"检查用户额度: openid={openid}", user_id=user_id)
             from app.services.credit_service import credit_service
             has_credit, error_msg = await credit_service.check_and_deduct_credit(
@@ -459,6 +461,27 @@ async def batch_edit_v2(
                     openid=openid
                 )
                 raise HTTPException(status_code=400, detail=error_msg)
+        elif not settings.ALLOW_IMAGE_EDIT_WITHOUT_OPENID:
+            # 没有 openid 且配置项未开启：拒绝请求
+            RequestLogger.log_error(
+                request_id,
+                Exception("需要关注公众号才能使用修图功能"),
+                "/api/v2/image-edit/batch",
+                user_id,
+                "openid_required"
+            )
+            raise HTTPException(
+                status_code=400, 
+                detail="需要关注公众号才能使用修图功能，请先关注公众号"
+            )
+        else:
+            # 没有 openid 但配置项已开启：允许使用（不检查额度，不扣减额度）
+            RequestLogger.log_step(
+                request_id, 
+                "allow_without_openid", 
+                "配置项已开启，允许未关注公众号的用户使用修图功能", 
+                user_id=user_id
+            )
         
         # 6. 读取图片数据
         RequestLogger.log_step(request_id, "read_images", f"开始读取 {len(images)} 张图片", user_id=user_id)

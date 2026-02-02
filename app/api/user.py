@@ -9,6 +9,7 @@ import aiomysql
 
 from app.database import db
 from app.services.credits_usage_service import credits_usage_service
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/user", tags=["用户"])
@@ -62,13 +63,54 @@ async def get_user_credits(
                     binding = await cursor.fetchone()
                     
                     if not binding or not binding['openid']:
-                        logger.warning(f"未找到有效绑定(openid为空): client_id={client_id}, 所有记录={all_bindings}")
-                        raise HTTPException(status_code=404, detail="用户未关注公众号")
+                        # 如果没有 openid，检查配置项是否允许未关注用户使用
+                        if settings.ALLOW_IMAGE_EDIT_WITHOUT_OPENID:
+                            # 配置项开启：返回试用模式响应
+                            logger.info(f"用户未关注公众号，但配置项已开启，返回试用模式: client_id={client_id}")
+                            response_data = {
+                                "success": True,
+                                "total_credits": None,  # 试用模式无额度限制
+                                "used_credits": 0,
+                                "remaining_credits": None,  # 试用模式无额度限制
+                                "is_followed": False,  # 未关注公众号
+                                "is_member": False,
+                                "member_expire_at": None,
+                                "is_trial_mode": True  # 标识为试用模式
+                            }
+                            response = JSONResponse(content=response_data)
+                            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                            response.headers["Pragma"] = "no-cache"
+                            response.headers["Expires"] = "0"
+                            return response
+                        else:
+                            # 配置项关闭：返回错误
+                            logger.warning(f"未找到有效绑定(openid为空): client_id={client_id}, 所有记录={all_bindings}")
+                            raise HTTPException(status_code=404, detail="用户未关注公众号")
                     
                     openid = binding['openid']
                     logger.info(f"找到openid: {openid[:16]}...")
         else:
-            raise HTTPException(status_code=400, detail="缺少client_id或openid参数")
+            # 既没有 openid 也没有 client_id
+            if settings.ALLOW_IMAGE_EDIT_WITHOUT_OPENID:
+                # 配置项开启：返回试用模式响应
+                logger.info("用户未提供身份信息，但配置项已开启，返回试用模式")
+                response_data = {
+                    "success": True,
+                    "total_credits": None,  # 试用模式无额度限制
+                    "used_credits": 0,
+                    "remaining_credits": None,  # 试用模式无额度限制
+                    "is_followed": False,  # 未关注公众号
+                    "is_member": False,
+                    "member_expire_at": None,
+                    "is_trial_mode": True  # 标识为试用模式
+                }
+                response = JSONResponse(content=response_data)
+                response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                response.headers["Pragma"] = "no-cache"
+                response.headers["Expires"] = "0"
+                return response
+            else:
+                raise HTTPException(status_code=400, detail="缺少client_id或openid参数")
         
         # 查询用户额度信息
         async with db.get_connection() as conn:
@@ -93,7 +135,8 @@ async def get_user_credits(
                     "remaining_credits": user['remaining_credits'],
                     "is_followed": True,  # 用户存在说明已关注公众号
                     "is_member": bool(user['is_member']),
-                    "member_expire_at": str(user['member_expire_at']) if user['member_expire_at'] else None
+                    "member_expire_at": str(user['member_expire_at']) if user['member_expire_at'] else None,
+                    "is_trial_mode": False  # 正式用户，非试用模式
                 }
                 response = JSONResponse(content=response_data)
                 response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -147,11 +190,36 @@ async def get_member_status(
                     binding = await cursor.fetchone()
                     
                     if not binding or not binding.get('openid'):
-                        raise HTTPException(status_code=404, detail="用户未关注公众号")
+                        # 如果没有 openid，检查配置项是否允许未关注用户使用
+                        if settings.ALLOW_IMAGE_EDIT_WITHOUT_OPENID:
+                            # 配置项开启：返回试用模式响应
+                            logger.info(f"用户未关注公众号，但配置项已开启，返回试用模式: client_id={client_id}")
+                            return {
+                                "success": True,
+                                "is_followed": False,  # 未关注公众号
+                                "is_member": False,
+                                "member_expire_at": None,
+                                "is_trial_mode": True  # 标识为试用模式
+                            }
+                        else:
+                            # 配置项关闭：返回错误
+                            raise HTTPException(status_code=404, detail="用户未关注公众号")
                     
                     openid = binding['openid']
         else:
-            raise HTTPException(status_code=400, detail="缺少client_id或openid参数")
+            # 既没有 openid 也没有 client_id
+            if settings.ALLOW_IMAGE_EDIT_WITHOUT_OPENID:
+                # 配置项开启：返回试用模式响应
+                logger.info("用户未提供身份信息，但配置项已开启，返回试用模式")
+                return {
+                    "success": True,
+                    "is_followed": False,  # 未关注公众号
+                    "is_member": False,
+                    "member_expire_at": None,
+                    "is_trial_mode": True  # 标识为试用模式
+                }
+            else:
+                raise HTTPException(status_code=400, detail="缺少client_id或openid参数")
         
         # 查询会员状态
         async with db.get_connection() as conn:
@@ -172,7 +240,8 @@ async def get_member_status(
                     "success": True,
                     "is_followed": True,  # 用户存在说明已关注公众号
                     "is_member": bool(user['is_member']),
-                    "member_expire_at": str(user['member_expire_at']) if user['member_expire_at'] else None
+                    "member_expire_at": str(user['member_expire_at']) if user['member_expire_at'] else None,
+                    "is_trial_mode": False  # 正式用户，非试用模式
                 }
                 
     except HTTPException:
