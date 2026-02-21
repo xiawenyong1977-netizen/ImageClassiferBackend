@@ -1,0 +1,37 @@
+请根据以下坐标列表，返回每个坐标的三级行政区信息（JSON数组格式）。
+
+要求：
+1. 返回中英文名称
+2. 返回三级行政区：国家、一级行政区（省/州）、二级行政区（市/县）
+3. 如果没有一级或二级行政区（如梵蒂冈等小国），保留为空
+4. **必须返回查询坐标（query_latitude, query_longitude）和城市坐标（city_latitude, city_longitude）**
+5. 返回结果必须按照输入顺序，且每个结果必须包含对应的index
+
+坐标列表：
+{coords_json}
+
+请返回以下格式的JSON数组：
+[
+    {{
+        "index": 0,
+        "query_latitude": 39.9042,      // 查询坐标（输入的圆心坐标）
+        "query_longitude": 116.4074,     // 查询坐标（输入的圆心坐标）
+        "city_latitude": 39.9042,        // 城市坐标（实际城市位置）
+        "city_longitude": 116.4074,      // 城市坐标（实际城市位置）
+        "country_code": "CN",
+        "country_name_zh": "中国",
+        "country_name_en": "China",
+        "admin1_name_zh": "北京市",
+        "admin1_name_en": "Beijing",
+        "admin2_name_zh": "东城区",
+        "admin2_name_en": "Dongcheng",
+        "city_name_zh": "北京市",
+        "city_name_en": "Beijing"
+    }}
+]
+
+重要提示：
+1. query_latitude 和 query_longitude 必须与输入坐标完全一致
+2. city_latitude 和 city_longitude 是实际城市的位置坐标
+3. 返回结果必须包含所有输入坐标，且index必须对应
+4. 只返回JSON数组，不要包含其他文字说明

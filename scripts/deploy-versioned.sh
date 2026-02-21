@@ -90,8 +90,8 @@ if [ ! -d "$SHARED_VENV" ]; then
     # 先安装CPU版本的PyTorch（服务器无GPU，使用CPU版本节省空间）
     echo "    安装PyTorch CPU版本..."
     pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cpu --quiet
-    # 然后安装其他依赖
-    echo "    安装其他依赖..."
+    # 然后安装其他依赖（包括scikit-learn，V3逆地址编码接口需要）
+    echo "    安装其他依赖（包括scikit-learn）..."
     pip install -r "$NEW_VERSION_DIR/requirements.txt" --quiet
     deactivate
     echo "  ✓ 共享虚拟环境已创建并安装依赖"

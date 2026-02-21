@@ -6,8 +6,9 @@
 import asyncio
 import json
 import re
+import math
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from loguru import logger
 from app.config import settings
 from app.services.llm.providers import AliyunProvider, OpenAIProvider, ClaudeProvider, DeepseekProvider
@@ -18,6 +19,40 @@ from app.services.llm.model_config import (
 )
 from app.services.unified_llm_cache import unified_llm_cache
 from app.utils.hash_utils import HashUtils
+
+# 尝试导入scikit-learn（用于聚类）
+try:
+    import numpy as np
+    from sklearn.cluster import DBSCAN
+    HAS_SKLEARN = True
+except ImportError:
+    HAS_SKLEARN = False
+    np = None
+    DBSCAN = None
+
+# 导入Coordinate类型和haversine_distance函数（用于类型提示和距离计算）
+try:
+    from app.api.location_v2 import Coordinate, haversine_distance
+except ImportError:
+    # 如果导入失败，定义一个简单的Coordinate类用于类型提示
+    from pydantic import BaseModel
+    class Coordinate(BaseModel):
+        id: Optional[str] = None
+        latitude: float
+        longitude: float
+    # 如果导入失败，定义一个简单的haversine_distance函数
+    def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """计算两个经纬度点之间的距离（公里）"""
+        R = 6371.0  # 地球半径（公里）
+        lat1_rad = math.radians(lat1)
+        lon1_rad = math.radians(lon1)
+        lat2_rad = math.radians(lat2)
+        lon2_rad = math.radians(lon2)
+        dlat = lat2_rad - lat1_rad
+        dlon = lon2_rad - lon1_rad
+        a = math.sin(dlat / 2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2)**2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
 
 
 class LLMService:
@@ -1457,6 +1492,353 @@ class LLMService:
             "retry_delay": self.retry_delay,
             "timeout": self.timeout
         }
+    
+    @staticmethod
+    def _calculate_cluster_center(
+        points: List[Coordinate],
+        radius_km: float = 3.0
+    ) -> Tuple[float, float]:
+        """
+        计算聚类中心点（自适应方案）
+        
+        根据照片分布选择最密集的点或质心：
+        - 密度差异大（景区场景）→ 使用最密集的点
+        - 密度差异小（非景区场景）→ 使用质心
+        
+        Args:
+            points: 聚类内的坐标点列表
+            radius_km: 半径（公里），用于计算密度
+        
+        Returns:
+            (center_lat, center_lon) 圆心坐标
+        """
+        if len(points) == 0:
+            raise ValueError("点列表不能为空")
+        
+        if len(points) == 1:
+            return points[0].latitude, points[0].longitude
+        
+        # 步骤1：计算每个点的密度（周围点数）
+        densities = []
+        for point in points:
+            density = sum(1 for p in points 
+                         if haversine_distance(
+                             point.latitude, point.longitude, 
+                             p.latitude, p.longitude
+                         ) <= radius_km)
+            densities.append((point, density))
+        
+        # 步骤2：判断是否存在明显的密集点
+        density_values = [d for _, d in densities]
+        max_density = max(density_values)
+        avg_density = sum(density_values) / len(density_values)
+        density_variance = sum((d - avg_density) ** 2 for d in density_values) / len(density_values)
+        
+        # 步骤3：根据密度分布选择圆心
+        if density_variance > avg_density * 0.5:
+            # 密度差异大，存在明显的密集点（景区场景）
+            # 使用最密集的点作为圆心
+            center_point = max(densities, key=lambda x: x[1])[0]
+            return center_point.latitude, center_point.longitude
+        else:
+            # 密度差异小，照片分布均匀（非景区场景）
+            # 使用质心（坐标平均值）
+            center_lat = sum(p.latitude for p in points) / len(points)
+            center_lon = sum(p.longitude for p in points) / len(points)
+            return center_lat, center_lon
+    
+    @staticmethod
+    def _cluster_coordinates_dbscan(
+        coordinates: List[Coordinate], 
+        radius_km: float = 3.0,
+        min_samples: int = 1
+    ) -> List[Tuple[float, float, List[Coordinate]]]:
+        """
+        使用DBSCAN算法将坐标点聚类成3公里圆
+        
+        Args:
+            coordinates: 坐标点列表
+            radius_km: 聚类半径（公里），默认3km
+            min_samples: 最小样本数，默认1（所有点都形成聚类）
+        
+        Returns:
+            聚类结果列表，格式：[(center_lat, center_lon, [该聚类内的坐标点列表]), ...]
+        """
+        if not HAS_SKLEARN:
+            raise ImportError("scikit-learn未安装，无法使用DBSCAN聚类算法")
+        
+        if len(coordinates) == 0:
+            return []
+        
+        if len(coordinates) == 1:
+            # 单个点，直接返回
+            coord = coordinates[0]
+            return [(coord.latitude, coord.longitude, [coord])]
+        
+        # 转换为numpy数组
+        coords_array = np.array([[c.latitude, c.longitude] for c in coordinates])
+        
+        # 将3公里转换为度（粗略估算：1度 ≈ 111公里）
+        eps_degrees = radius_km / 111.0
+        
+        # DBSCAN聚类
+        # 注意：使用haversine距离需要将坐标转换为弧度
+        clustering = DBSCAN(
+            eps=eps_degrees,
+            min_samples=min_samples,
+            metric='haversine',
+            algorithm='ball_tree'
+        )
+        labels = clustering.fit_predict(np.radians(coords_array))  # 转换为弧度
+        
+        # 构建聚类结果
+        clusters = {}
+        for i, label in enumerate(labels):
+            if label not in clusters:
+                clusters[label] = []
+            clusters[label].append(coordinates[i])
+        
+        # 计算每个聚类的圆心（自适应方案）
+        result = []
+        for label, points in clusters.items():
+            if len(points) == 1:
+                # 单点聚类，直接使用该点坐标
+                center_lat = points[0].latitude
+                center_lon = points[0].longitude
+            else:
+                # 多点聚类，使用自适应方案计算圆心
+                center_lat, center_lon = LLMService._calculate_cluster_center(points, radius_km)
+            
+            result.append((center_lat, center_lon, points))
+        
+        return result
+    
+    async def _query_locations_by_llm_single_batch(
+        self,
+        center_coordinates: List[Tuple[float, float]]
+    ) -> List[dict]:
+        """
+        使用大模型查询单个批次的位置信息（最多30个圆心）
+        
+        Args:
+            center_coordinates: 圆心坐标列表，格式：[(lat, lon), ...]
+        
+        Returns:
+            位置信息列表，每个元素包含位置信息字典
+        """
+        # 构建坐标列表（包含index，便于匹配）
+        coords_list = [
+            {"index": i, "latitude": lat, "longitude": lon}
+            for i, (lat, lon) in enumerate(center_coordinates)
+        ]
+        coords_json = json.dumps(coords_list, indent=2, ensure_ascii=False)
+        
+        # 从配置文件读取提示词模板，并替换坐标列表
+        prompt_template = settings.REVERSE_GEOCODING_PROMPT
+        prompt = prompt_template.format(coords_json=coords_json)
+        
+        # 调用大模型API
+        # 根据坐标数量动态调整max_tokens
+        estimated_tokens = len(center_coordinates) * 200 + 1000  # 每个坐标200 tokens + 基础1000 tokens
+        max_tokens = min(estimated_tokens, 16000)  # 限制最大16k，避免超出API限制
+        
+        result = await self.generate_text(
+            prompt=prompt,
+            system_prompt="你是一个专业的地理信息专家，能够准确地将坐标转换为地址信息。",
+            max_tokens=max_tokens,
+            temperature=0.3,  # 降低温度，提高准确性
+        )
+        
+        if not result.get("success"):
+            error_info = result.get("error", {})
+            raise Exception(f"大模型调用失败: {error_info.get('message', '未知错误')}")
+        
+        content = result.get("content", "")
+        
+        # 解析JSON响应
+        try:
+            # 移除可能的markdown代码块标记
+            content_clean = content.strip()
+            if content_clean.startswith("```json"):
+                content_clean = content_clean[7:]
+            if content_clean.startswith("```"):
+                content_clean = content_clean[3:]
+            if content_clean.endswith("```"):
+                content_clean = content_clean[:-3]
+            content_clean = content_clean.strip()
+            
+            location_data_list = json.loads(content_clean)
+            
+            if not isinstance(location_data_list, list):
+                raise ValueError(f"大模型返回结果不是数组格式: {type(location_data_list)}")
+            
+            # 验证：检查是否所有坐标都有对应的结果
+            input_indices = set(range(len(center_coordinates)))
+            result_indices = set(item.get('index') for item in location_data_list if 'index' in item)
+            
+            if input_indices != result_indices:
+                logger.warning(f"大模型返回结果不完整: 输入={len(center_coordinates)}个, 返回={len(location_data_list)}个")
+                # 补充缺失的结果（返回None标记，由调用方处理）
+                missing_indices = input_indices - result_indices
+                for idx in missing_indices:
+                    location_data_list.append({
+                        "index": idx,
+                        "query_latitude": center_coordinates[idx][0],
+                        "query_longitude": center_coordinates[idx][1],
+                        "error": "大模型未返回该坐标的结果"
+                    })
+            
+            return location_data_list
+        except json.JSONDecodeError as e:
+            logger.error(f"大模型返回JSON解析失败: {e}")
+            logger.error(f"原始内容: {content[:500]}")  # 只记录前500字符
+            raise
+    
+    async def reverse_geocode_batch(
+        self,
+        coordinates: List[Coordinate],
+        use_clustering: bool = True,
+        radius_km: float = 3.0,
+        min_samples: int = 1,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        批量逆地址编码（坐标转地址）
+        
+        接收未命中本地数据库的坐标，进行聚类、LLM查询等处理。
+        
+        Args:
+            coordinates: 坐标列表（未命中本地数据库的坐标）
+            use_clustering: 是否使用聚类优化（默认True）
+            radius_km: 聚类半径（默认3km）
+            min_samples: DBSCAN最小样本数（默认1）
+            **kwargs: 其他参数
+        
+        Returns:
+            结果字典，包含：
+            - success: 是否成功
+            - results: 位置信息列表，格式：
+              [
+                  {
+                      "coordinate": Coordinate,  # 原始坐标
+                      "location_info": dict,      # LLM返回的位置信息
+                      "cluster_center": Tuple[float, float]  # 所属聚类的中心（如果使用聚类）
+                  },
+                  ...
+              ]
+            - clusters: 聚类信息（如果使用聚类），格式：
+              [(center_lat, center_lon, [坐标点列表]), ...]
+            - error: 错误信息（失败时）
+        """
+        if len(coordinates) == 0:
+            return {
+                "success": True,
+                "results": [],
+                "clusters": []
+            }
+        
+        try:
+            # 步骤1：聚类（如果启用）
+            if use_clustering:
+                if not HAS_SKLEARN:
+                    logger.warning("scikit-learn未安装，无法使用聚类，将逐个查询")
+                    use_clustering = False
+                else:
+                    clusters = self._cluster_coordinates_dbscan(
+                        coordinates, 
+                        radius_km=radius_km, 
+                        min_samples=min_samples
+                    )
+                    logger.info(f"聚类完成: {len(coordinates)}个坐标 → {len(clusters)}个聚类")
+            else:
+                # 不使用聚类，每个坐标单独形成一个"聚类"
+                clusters = [(coord.latitude, coord.longitude, [coord]) for coord in coordinates]
+            
+            # 步骤2：提取聚类中心坐标
+            center_coordinates = [(center_lat, center_lon) for center_lat, center_lon, _ in clusters]
+            
+            # 步骤3：分批查询（30个/批次）
+            BATCH_SIZE = 30
+            all_results = []
+            
+            for i in range(0, len(center_coordinates), BATCH_SIZE):
+                batch = center_coordinates[i:i + BATCH_SIZE]
+                logger.info(f"处理批次 {i//BATCH_SIZE + 1}/{(len(center_coordinates)-1)//BATCH_SIZE + 1}, "
+                           f"圆心数量: {len(batch)}")
+                
+                try:
+                    # 调用大模型查询当前批次
+                    batch_results = await self._query_locations_by_llm_single_batch(batch)
+                    all_results.extend(batch_results)
+                except Exception as e:
+                    logger.error(f"批次处理失败: {e}", exc_info=True)
+                    # 为失败的批次创建错误标记
+                    for idx, (lat, lon) in enumerate(batch):
+                        batch_idx = i + idx
+                        all_results.append({
+                            "index": batch_idx,
+                            "query_latitude": lat,
+                            "query_longitude": lon,
+                            "error": f"大模型查询失败: {str(e)}"
+                        })
+                
+                # 避免API限流
+                if i + BATCH_SIZE < len(center_coordinates):
+                    await asyncio.sleep(1)  # 批次间等待1秒
+            
+            # 步骤4：构建结果映射（圆心结果 → 原始坐标点）
+            # 建立圆心坐标到结果的映射
+            center_to_result = {}
+            for llm_result in all_results:
+                query_lat = llm_result.get('query_latitude')
+                query_lon = llm_result.get('query_longitude')
+                if query_lat is not None and query_lon is not None:
+                    # 使用精确匹配（允许小误差）
+                    center_to_result[(query_lat, query_lon)] = llm_result
+            
+            # 为每个原始坐标点分配结果
+            results = []
+            for center_lat, center_lon, points in clusters:
+                # 查找该聚类中心对应的LLM结果
+                llm_result = None
+                # 先尝试精确匹配
+                if (center_lat, center_lon) in center_to_result:
+                    llm_result = center_to_result[(center_lat, center_lon)]
+                else:
+                    # 如果精确匹配失败，尝试模糊匹配（允许小误差）
+                    for (clat, clon), result in center_to_result.items():
+                        if abs(clat - center_lat) < 0.0001 and abs(clon - center_lon) < 0.0001:
+                            llm_result = result
+                            break
+                
+                # 为聚类内的每个坐标点分配结果
+                for coord in points:
+                    results.append({
+                        "coordinate": coord,
+                        "location_info": llm_result if llm_result else {
+                            "error": "未找到对应的LLM查询结果"
+                        },
+                        "cluster_center": (center_lat, center_lon)
+                    })
+            
+            return {
+                "success": True,
+                "results": results,
+                "clusters": clusters
+            }
+            
+        except Exception as e:
+            logger.error(f"批量逆地址编码失败: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": {
+                    "type": "business_error",
+                    "message": str(e),
+                    "user_message": "逆地址编码失败，请稍后重试"
+                },
+                "results": [],
+                "clusters": []
+            }
 
 
 # 全局LLM服务实例（使用配置的默认值）

@@ -92,6 +92,21 @@ Write-Host "  版本目录: $VERSION_DIR (debug)" -ForegroundColor Cyan
 
 Write-Host "`n[2/6] 同步代码文件..." -ForegroundColor Green
 
+# 不需要部署到服务器的目录（过滤列表）
+$excludedDirs = @(
+    "docs",              # 文档目录
+    "tools/测试",        # 测试脚本目录
+    "tools/工具",        # 开发工具目录
+    "tools/数据库",      # 数据库工具目录（部分可能需要，但测试脚本不需要）
+    ".git",              # Git 目录
+    ".vscode",           # VS Code 配置
+    ".idea",             # IntelliJ IDEA 配置
+    "__pycache__",       # Python 缓存
+    "*.pyc",             # Python 编译文件
+    "node_modules",      # Node.js 依赖（如果有）
+    ".pytest_cache"      # pytest 缓存
+)
+
 # 增量部署：使用 git 检测变更的文件
 $changedFiles = @()
 $changedDirs = @()
@@ -106,11 +121,15 @@ if ($Incremental) {
         Write-Host "  检测工作区变更文件（未提交的修改）..." -ForegroundColor Cyan
         Push-Location $LOCAL_DIR
         
+        # 设置 git 输出编码为 UTF-8，避免中文路径编码问题
+        $env:GIT_PAGER = ""
+        $env:LANG = "en_US.UTF-8"
+        
         # 1. 检测未跟踪的文件（新文件，从未 push）
-        $gitUntracked = git ls-files --others --exclude-standard 2>$null
+        $gitUntracked = git -c core.quotepath=false ls-files --others --exclude-standard 2>$null
         
         # 2. 检测工作区中已修改但未提交的文件
-        $gitWorktreeChanged = git diff --name-only HEAD 2>$null
+        $gitWorktreeChanged = git -c core.quotepath=false diff --name-only HEAD 2>$null
         
         # 3. 合并工作区变更文件（只检测未提交的修改，不检测已提交但未 push 的文件）
         $allChangedFiles = @()
@@ -125,13 +144,26 @@ if ($Incremental) {
             $allChangedFiles += $gitWorktreeChanged -split "`n" | Where-Object { $_ -and $_.Trim() }
         }
         
-        # 去重
-        $changedFiles = $allChangedFiles | Select-Object -Unique
+        # 去重并过滤不需要部署的文件
+        $changedFiles = $allChangedFiles | Select-Object -Unique | Where-Object {
+            $file = $_.Replace("\", "/")
+            $shouldInclude = $true
+            
+            # 检查是否在排除目录中
+            foreach ($excludedDir in $excludedDirs) {
+                if ($file -like "$excludedDir/*" -or $file -eq $excludedDir) {
+                    $shouldInclude = $false
+                    break
+                }
+            }
+            
+            $shouldInclude
+        }
         
         Pop-Location
         
         if ($changedFiles.Count -gt 0) {
-            Write-Host "  发现 $($changedFiles.Count) 个工作区变更文件（未提交的修改）" -ForegroundColor Cyan
+            Write-Host "  发现 $($changedFiles.Count) 个工作区变更文件（未提交的修改，已过滤排除目录）" -ForegroundColor Cyan
             if ($gitUntracked) {
                 $untrackedCount = ($gitUntracked -split "`n" | Where-Object { $_ -and $_.Trim() }).Count
                 Write-Host "    - 未跟踪文件（新文件）: $untrackedCount 个文件" -ForegroundColor Gray
@@ -147,23 +179,32 @@ if ($Incremental) {
             foreach ($file in $changedFiles) {
                 # 统一路径分隔符
                 $normalizedFile = $file.Replace("\", "/")
-                $filePath = Join-Path $LOCAL_DIR $normalizedFile
                 
-                if (Test-Path $filePath) {
-                    # 提取根目录（第一个路径段）
-                    $pathParts = $normalizedFile -split "/"
-                    if ($pathParts.Count -gt 1) {
-                        $rootDir = $pathParts[0]
-                        if ($rootDir -and $rootDir -notin $changedDirs) {
-                            $changedDirs += $rootDir
-                            Write-Host "    检测到变更目录: $rootDir (来自文件: $normalizedFile)" -ForegroundColor Gray
+                # 使用 LiteralPath 和 try-catch 来处理可能包含特殊字符的路径
+                try {
+                    $filePath = [System.IO.Path]::Combine($LOCAL_DIR, $normalizedFile)
+                    $filePath = [System.IO.Path]::GetFullPath($filePath)
+                    
+                    if ([System.IO.File]::Exists($filePath) -or [System.IO.Directory]::Exists($filePath)) {
+                        # 提取根目录（第一个路径段）
+                        $pathParts = $normalizedFile -split "/"
+                        if ($pathParts.Count -gt 1) {
+                            $rootDir = $pathParts[0]
+                            if ($rootDir -and $rootDir -notin $changedDirs) {
+                                $changedDirs += $rootDir
+                                Write-Host "    检测到变更目录: $rootDir (来自文件: $normalizedFile)" -ForegroundColor Gray
+                            }
+                        } elseif ($pathParts.Count -eq 1) {
+                            # 根目录下的文件，不需要同步目录
+                            Write-Host "    检测到根目录文件: $normalizedFile" -ForegroundColor Gray
                         }
-                    } elseif ($pathParts.Count -eq 1) {
-                        # 根目录下的文件，不需要同步目录
-                        Write-Host "    检测到根目录文件: $normalizedFile" -ForegroundColor Gray
+                    } else {
+                        Write-Host "    警告: 变更文件不存在: $normalizedFile" -ForegroundColor Yellow
                     }
-                } else {
-                    Write-Host "    警告: 变更文件不存在: $normalizedFile" -ForegroundColor Yellow
+                } catch {
+                    # 如果路径处理失败（可能是编码问题），跳过该文件
+                    Write-Host "    警告: 无法处理文件路径（可能包含特殊字符）: $normalizedFile" -ForegroundColor Yellow
+                    Write-Host "      错误: $($_.Exception.Message)" -ForegroundColor DarkYellow
                 }
             }
             
@@ -229,12 +270,18 @@ function Sync-Directory {
         foreach ($file in $filesInDir) {
             # 统一路径分隔符为 Unix 风格
             $normalizedFile = $file.Replace("\", "/")
-            $localFilePath = Join-Path $LOCAL_DIR $normalizedFile
-            # PowerShell 的 Join-Path 使用反斜杠，需要转换
-            $localFilePath = $localFilePath.Replace("\", "/")
             
-            if (-not (Test-Path $localFilePath)) {
-                Write-Host "    跳过 $normalizedFile (文件不存在)" -ForegroundColor Yellow
+            # 使用 System.IO.Path 来处理路径，避免编码问题
+            try {
+                $localFilePath = [System.IO.Path]::Combine($LOCAL_DIR, $normalizedFile)
+                $localFilePath = [System.IO.Path]::GetFullPath($localFilePath)
+                
+                if (-not ([System.IO.File]::Exists($localFilePath) -or [System.IO.Directory]::Exists($localFilePath))) {
+                    Write-Host "    跳过 $normalizedFile (文件不存在)" -ForegroundColor Yellow
+                    continue
+                }
+            } catch {
+                Write-Host "    跳过 $normalizedFile (路径处理失败: $($_.Exception.Message))" -ForegroundColor Yellow
                 continue
             }
             
@@ -257,8 +304,9 @@ function Sync-Directory {
             $remoteDir = Split-Path $remoteFilePath -Parent
             ssh $SERVER "mkdir -p `"$remoteDir`"" 2>&1 | Out-Null
             
-            # 同步文件
-            $scpOutput = scp "$localFilePath" "${SERVER}:${remoteFilePath}" 2>&1
+            # 同步文件（确保路径使用正斜杠，避免Windows路径问题）
+            $scpLocalPath = $localFilePath.Replace("\", "/")
+            $scpOutput = scp "$scpLocalPath" "${SERVER}:${remoteFilePath}" 2>&1
             $scpExitCode = $LASTEXITCODE
             
             if ($scpExitCode -eq 0) {

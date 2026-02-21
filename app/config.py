@@ -7,7 +7,7 @@
 import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
-from pydantic import Field, ConfigDict, field_validator
+from pydantic import Field, ConfigDict, field_validator, model_validator
 from typing import List, Optional
 
 
@@ -284,6 +284,47 @@ class Settings(BaseSettings):
         description="面相预测提示词"
     )
     
+    REVERSE_GEOCODING_PROMPT: str = Field(
+        default="""请根据以下坐标列表，返回每个坐标的三级行政区信息（JSON数组格式）。
+
+要求：
+1. 返回中英文名称
+2. 返回三级行政区：国家、一级行政区（省/州）、二级行政区（市/县）
+3. 如果没有一级或二级行政区（如梵蒂冈等小国），保留为空
+4. **必须返回查询坐标（query_latitude, query_longitude）和城市坐标（city_latitude, city_longitude）**
+5. 返回结果必须按照输入顺序，且每个结果必须包含对应的index
+
+坐标列表：
+{coords_json}
+
+请返回以下格式的JSON数组：
+[
+    {{
+        "index": 0,
+        "query_latitude": 39.9042,      // 查询坐标（输入的圆心坐标）
+        "query_longitude": 116.4074,     // 查询坐标（输入的圆心坐标）
+        "city_latitude": 39.9042,        // 城市坐标（实际城市位置）
+        "city_longitude": 116.4074,      // 城市坐标（实际城市位置）
+        "country_code": "CN",
+        "country_name_zh": "中国",
+        "country_name_en": "China",
+        "admin1_name_zh": "北京市",
+        "admin1_name_en": "Beijing",
+        "admin2_name_zh": "东城区",
+        "admin2_name_en": "Dongcheng",
+        "city_name_zh": "北京市",
+        "city_name_en": "Beijing"
+    }}
+]
+
+重要提示：
+1. query_latitude 和 query_longitude 必须与输入坐标完全一致
+2. city_latitude 和 city_longitude 是实际城市的位置坐标
+3. 返回结果必须包含所有输入坐标，且index必须对应
+4. 只返回JSON数组，不要包含其他文字说明""",
+        description="逆地址编码提示词"
+    )
+    
     # ===== 认证配置 =====
     JWT_SECRET_KEY: str = Field(
         default="your-secret-key-change-in-production-please-use-strong-random-key",
@@ -386,6 +427,50 @@ class Settings(BaseSettings):
         # 允许从环境变量覆盖（优先级最高）
         extra="ignore"
     )
+    
+    @model_validator(mode='after')
+    def load_prompts_from_files(self):
+        """
+        从 prompts/ 目录加载提示词文件（如果存在且环境变量未设置）
+        
+        配置优先级（从高到低）：
+        1. 环境变量（.env 文件中手动设置，用于特殊覆盖）
+        2. prompts/ 目录下的文件（如果存在，自动读取，用于版本控制）
+        3. config.py 中的默认值（如果文件不存在，使用此默认值）
+        
+        注意：环境变量和 prompts/ 文件不会同时生效。
+        如果环境变量已设置，则使用环境变量；否则尝试从 prompts/ 文件读取。
+        """
+        prompt_mappings = {
+            "CLASSIFICATION_PROMPT": "classification",
+            "COLOR_CLASSIFICATION_PROMPT": "color_classification",
+            "COMPOSITION_ANALYSIS_PROMPT": "composition_analysis",
+            "FACE_FORTUNE_PROMPT": "face_fortune",
+            "REVERSE_GEOCODING_PROMPT": "reverse_geocoding",
+        }
+        
+        for env_key, file_name in prompt_mappings.items():
+            # 如果环境变量中没有设置，尝试从文件加载
+            if env_key not in os.environ:
+                current_value = getattr(self, env_key, None)
+                if current_value:
+                    # 获取项目根目录
+                    current_dir = Path(__file__).parent.parent
+                    prompt_file = current_dir / "prompts" / f"{file_name}.txt"
+                    
+                    if prompt_file.exists():
+                        try:
+                            file_content = prompt_file.read_text(encoding="utf-8").rstrip()
+                            # 如果文件内容与当前值不同，使用文件内容
+                            if file_content != current_value:
+                                setattr(self, env_key, file_content)
+                        except Exception as e:
+                            # 如果读取失败，保持当前值（默认值）
+                            import sys
+                            from loguru import logger
+                            logger.warning(f"无法读取提示词文件 {prompt_file}: {e}，使用默认值")
+        
+        return self
 
 
 # 全局配置实例

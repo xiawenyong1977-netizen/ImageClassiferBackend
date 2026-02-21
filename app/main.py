@@ -184,6 +184,24 @@ try:
     app.include_router(location_v2.router)  # 地理位置API v2版本
 except ImportError:
     logger.warning("location_v2模块导入失败，v2接口不可用")
+
+# 导入v3版本地理位置接口（需要scikit-learn依赖）
+try:
+    # 先检查scikit-learn依赖
+    import sklearn
+    from sklearn.cluster import DBSCAN
+    from app.api import location_v3
+    app.include_router(location_v3.router)  # 地理位置API v3版本（基于大模型）
+    logger.info("✓ V3逆地址编码接口已启用（需要scikit-learn依赖）")
+except ImportError as e:
+    if "sklearn" in str(e) or "scikit-learn" in str(e):
+        logger.error(f"✗ V3逆地址编码接口需要scikit-learn依赖，请安装: pip install scikit-learn>=1.3.0")
+        raise ImportError(
+            "V3逆地址编码接口需要scikit-learn依赖，请安装: pip install scikit-learn>=1.3.0"
+        ) from e
+    else:
+        logger.warning(f"v3地理位置接口模块导入失败，v3接口不可用: {e}")
+        location_v3 = None
 app.include_router(image_edit.router)  # 图像编辑（v1版本）
 if image_edit_v2 is not None:
     app.include_router(image_edit_v2.router)  # 图像编辑（v2版本）

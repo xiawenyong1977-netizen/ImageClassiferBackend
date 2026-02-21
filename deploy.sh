@@ -314,6 +314,10 @@ ssh $SERVER "
     else
         echo '  ⚠ 无法检测系统类型，跳过系统依赖检查'
     fi
+    echo ''
+    echo '检查系统依赖 scikit-learn (V3逆地址编码接口所需)...'
+    echo '  注意: scikit-learn 是 Python 包，将在虚拟环境中安装'
+    echo '  ✓ 将在虚拟环境安装依赖时自动安装 scikit-learn'
 " || {
     echo "  警告: 系统依赖检查可能有问题"
 }

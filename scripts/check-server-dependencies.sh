@@ -58,13 +58,38 @@ ssh $SERVER "cd $REMOTE_DIR && \
 "
 
 echo ""
-echo "[3/3] 检查系统 Python 中的 pyzbar..."
+echo "[3/4] 检查系统 Python 中的 pyzbar..."
 ssh $SERVER "
     if python3 -c 'from pyzbar.pyzbar import decode; print(\"✓ pyzbar 可以正常导入\")' 2>/dev/null; then
         echo '✓ pyzbar 可以正常导入（系统 Python）'
     else
         echo '✗ pyzbar 无法导入（系统 Python）'
         echo '  注意: 应用使用虚拟环境，此检查仅供参考'
+    fi
+"
+
+echo ""
+echo "[4/4] 检查 Python 虚拟环境中的 scikit-learn..."
+ssh $SERVER "cd $REMOTE_DIR && \
+    SHARED_VENV=\"$REMOTE_DIR/venv\" && \
+    if [ -d \"\$SHARED_VENV\" ]; then
+        echo '检查虚拟环境: \$SHARED_VENV'
+        source \"\$SHARED_VENV/bin/activate\" && \
+        if python -c 'import sklearn; from sklearn.cluster import DBSCAN; print(\"✓ scikit-learn 可以正常导入\")' 2>/dev/null; then
+            echo '✓ scikit-learn 可以正常导入'
+            python -c 'import sklearn; print(f\"  版本: {sklearn.__version__}\")' 2>/dev/null || true
+        else
+            echo '✗ scikit-learn 无法导入'
+            echo '  可能原因: scikit-learn Python 包未安装'
+            echo ''
+            echo '安装步骤:'
+            echo '  source venv/bin/activate && pip install scikit-learn>=1.3.0'
+            echo ''
+            echo '  注意: V3逆地址编码接口需要 scikit-learn 依赖'
+        fi && \
+        deactivate
+    else
+        echo '✗ 虚拟环境不存在: \$SHARED_VENV'
     fi
 "
 
