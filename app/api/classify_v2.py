@@ -7,6 +7,7 @@
 
 from fastapi import APIRouter, File, UploadFile, Form, Header, HTTPException, Request
 from typing import Optional, List, Tuple
+import json
 import time
 import asyncio
 import io
@@ -23,7 +24,9 @@ from app.models.schemas_v2 import (
     InternalErrorType
 )
 from app.services.llm import llm_service
+from app.services.color_service import get_dominant_color
 from app.services.stats_service import stats_service
+from app.services.unified_llm_cache import unified_llm_cache
 from app.services.user_photos_service import user_photos_service
 from app.utils.image_utils import ImageUtils
 from app.utils.hash_utils import HashUtils
@@ -255,10 +258,17 @@ async def _classify_single_image(
             )
         
         # 2. 调用LLM（内部会处理缓存查询和响应解析）
-        # 传入客户端提供的hash（基于原图），用于查询缓存
+        # 使用默认提示词时：用无颜色提示词调用LLM，本地算主色后合并
+        # 使用自定义提示词时：保持原逻辑
+        is_default_prompt = prompt == settings.CLASSIFICATION_PROMPT
+        actual_prompt = (
+            settings.CLASSIFICATION_PROMPT_CONTENT_ONLY
+            if is_default_prompt
+            else prompt
+        )
         llm_result = await llm_service.classify_image(
             image_bytes=image_bytes,
-            prompt=prompt,
+            prompt=actual_prompt,
             use_cache=True,  # llm_service内部会处理缓存
             image_hash=image_hash  # 使用客户端提供的原图hash
         )
@@ -304,6 +314,32 @@ async def _classify_single_image(
                 "background_color": None,
                 "raw_content": content
             }
+        
+        # 5. 默认提示词：本地算主色，合并进结果并更新缓存
+        if is_default_prompt and llm_result.get('success'):
+            local_color = get_dominant_color(image_bytes)
+            if local_color:
+                parsed_result["background_color"] = local_color
+                # 更新缓存：将 background_color 合并进该条缓存的 value
+                try:
+                    merged = {
+                        "category": parsed_result.get("category"),
+                        "confidence": parsed_result.get("confidence"),
+                        "description": parsed_result.get("description"),
+                        "background_color": local_color
+                    }
+                    merged_content = json.dumps(merged, ensure_ascii=False)
+                    await unified_llm_cache.save_result(
+                        prompt=actual_prompt,
+                        image_hash=image_hash,
+                        provider=llm_service.provider,
+                        model_id=llm_service.model,
+                        result=merged_content,
+                        service_type="classification",
+                        is_default_prompt=True
+                    )
+                except Exception as e:
+                    logger.debug(f"更新缓存主色失败: {e}")
         
         # 判断是否来自缓存
         from_cache = llm_result.get('from_cache', False)
@@ -751,11 +787,21 @@ async def batch_check_cache_v2(
         semaphore = asyncio.Semaphore(max_concurrent_cache_queries)
         
         async def check_cache_with_limit(item: ImageMetadataItem):
-            """带并发限制的缓存查询"""
+            """带并发限制的缓存查询，默认提示词时双提示词查询"""
             async with semaphore:
-                # 注意：这里使用客户端提供的 image_hash
-                # 如果客户端 hash 不正确，会导致缓存查询失败
-                # 而 batch 接口使用服务端计算的 hash，所以可能命中缓存
+                # 默认提示词：先查有颜色，再查无颜色
+                if prompt == settings.CLASSIFICATION_PROMPT:
+                    cached = await llm_service.check_cache(
+                        prompt=settings.CLASSIFICATION_PROMPT, image_hash=item.image_hash
+                    )
+                    if cached:
+                        return cached
+                    cached = await llm_service.check_cache(
+                        prompt=settings.CLASSIFICATION_PROMPT_CONTENT_ONLY,
+                        image_hash=item.image_hash
+                    )
+                    return cached
+                # 自定义提示词：单次查询
                 return await llm_service.check_cache(prompt=prompt, image_hash=item.image_hash)
         
         cache_tasks = [

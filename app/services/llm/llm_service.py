@@ -284,7 +284,11 @@ class LLMService:
             prompt = settings.CLASSIFICATION_PROMPT
         
         # 判断是否使用默认prompt（默认prompt要求返回JSON格式）
-        is_default_prompt = prompt == settings.CLASSIFICATION_PROMPT
+        # 含内容+颜色的提示词、仅内容的提示词均按JSON解析
+        is_default_prompt = (
+            prompt == settings.CLASSIFICATION_PROMPT
+            or prompt == settings.CLASSIFICATION_PROMPT_CONTENT_ONLY
+        )
         
         # 使用客户端提供的hash（基于原图），如果没有提供则基于压缩后的图片计算
         # 注意：由于服务器收到的图片是压缩后的，应该使用客户端提供的原图hash来查询缓存
@@ -1408,7 +1412,13 @@ class LLMService:
         
         if service_type == "classification":
             # 分类服务：使用缓存中的标记，如果没有则回退到字符串比较
-            is_default_prompt = cached_is_default_prompt if cached_is_default_prompt is not None else (prompt == settings.CLASSIFICATION_PROMPT)
+            is_default_prompt = (
+                cached_is_default_prompt if cached_is_default_prompt is not None
+                else (
+                    prompt == settings.CLASSIFICATION_PROMPT
+                    or prompt == settings.CLASSIFICATION_PROMPT_CONTENT_ONLY
+                )
+            )
             
             if is_debug:
                 logger.info(f"[DEBUG] classification处理: cached_is_default_prompt={cached_is_default_prompt}, is_default_prompt={is_default_prompt}, prompt匹配={prompt == settings.CLASSIFICATION_PROMPT}")
