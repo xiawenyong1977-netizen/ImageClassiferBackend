@@ -41,6 +41,7 @@ openai==1.10.0
 
 # 工具库
 python-multipart==0.0.6  # 文件上传
+pypinyin>=0.50.0         # 中文转拼音（数据库工具脚本用）
 python-dotenv==1.0.0      # 环境变量
 loguru==0.7.2             # 日志
 scikit-learn>=1.3.0       # DBSCAN聚类算法（V3逆地址编码接口需要）

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-地理位置相关API路由（v2版本）
+地理位置相关API路由（v2版本），已废弃，使用v3版本代替
 支持外部API调用和批量查询
 """
 from fastapi import APIRouter, HTTPException, Depends, Request
@@ -45,8 +45,14 @@ class CityInfoV2(BaseModel):
     latitude: float = Field(description="纬度")
     longitude: float = Field(description="经度")
     country_code: str = Field(description="国家代码（ISO 3166-1 alpha-2）")
-    
-    # 行政区划信息
+
+    # 三级行政区（国家、一级、二级）- 客户端 location_id 生成用
+    admin1_zh: Optional[str] = Field(None, description="一级行政区中文名（省/直辖市/州）")
+    admin1_en: Optional[str] = Field(None, description="一级行政区英文名")
+    admin2_zh: Optional[str] = Field(None, description="二级行政区中文名（市/区/县）")
+    admin2_en: Optional[str] = Field(None, description="二级行政区英文名")
+
+    # 行政区划信息（兼容旧版）
     admin1_code: Optional[str] = Field(None, description="一级行政区代码")
     admin2_code: Optional[str] = Field(None, description="二级行政区代码")
     province: Optional[str] = Field(None, description="省份/州名称")

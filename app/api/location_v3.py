@@ -26,14 +26,202 @@ from app.api.location_v2 import (
     CityQueryResult,
     BatchNearestCityResponse,
     haversine_distance,
-    query_local_db,
-    save_city_to_db,
-    validate_and_normalize_location,
     create_unknown_location,
-    query_fallback_v1
 )
 
 router = APIRouter(prefix="/api/v3/location", tags=["location-v3"])
+
+
+# ===== 名称规范化 =====
+# 中文行政区划后缀（按长度从长到短，避免 自治区 被 区 误删）
+_PLACE_SUFFIXES_ZH = [
+    "特别行政区", "自治区", "直辖市", "地区",
+    "市", "省", "县", "区", "州", "盟",
+]
+# 英文常见后缀
+_PLACE_SUFFIXES_EN = [
+    " Special Administrative Region", " Autonomous Region", " Province",
+    " City", " District", " County", " Prefecture", " Region",
+]
+
+
+def _normalize_place_name(name: Optional[str]) -> str:
+    """
+    规范化地名：trim + 去掉末尾的行政区划后缀
+    与客户端 LocationStorageService 的 normalizeDisplayName 一致，便于 location_id 匹配
+    中文 ≤2 字不规范化（如 北区、东区）
+    """
+    if not name or not isinstance(name, str):
+        return ""
+    s = name.strip()
+    if not s:
+        return ""
+    has_chinese = any("\u4e00" <= c <= "\u9fff" for c in s)
+    # 中文 ≤2 字不规范化
+    if has_chinese and len(s) <= 2:
+        return s
+    # 中文：去掉 市、省、县、区、州 等
+    if has_chinese:
+        for suffix in _PLACE_SUFFIXES_ZH:
+            if s.endswith(suffix) and len(s) > len(suffix):
+                s = s[: -len(suffix)].strip()
+                break
+    else:
+        # 英文：去掉 Province、City 等（忽略大小写）
+        for suffix in _PLACE_SUFFIXES_EN:
+            if len(s) > len(suffix) and s.lower().endswith(suffix.lower()):
+                s = s[: -len(suffix)].strip()
+                break
+    return s
+
+
+# ===== V3 专用：location_cache_v3 表 =====
+async def query_location_cache_v3(latitude: float, longitude: float, max_distance_km: float = 3.0) -> Optional[dict]:
+    """
+    从 location_cache_v3 查询 3km 内最近的位置
+    返回格式可直接转为 CityInfoV2（含完整中英文）
+    """
+    try:
+        query = """
+            SELECT id, latitude, longitude,
+                   country_code, country_zh, country_en,
+                   province_zh, province_en, city_zh, city_en, district_zh, district_en,
+                   ST_Distance_Sphere(POINT(longitude, latitude), POINT(%s, %s)) / 1000 AS distance_km
+            FROM location_cache_v3
+            WHERE ST_Distance_Sphere(POINT(longitude, latitude), POINT(%s, %s)) / 1000 <= %s
+            ORDER BY distance_km
+            LIMIT 1
+        """
+        async with db.get_cursor() as cursor:
+            await cursor.execute(query, (longitude, latitude, longitude, latitude, max_distance_km))
+            row = await cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+    except Exception as e:
+        logger.error(f"location_cache_v3 查询失败: {e}")
+        return None
+
+
+def _cache_row_to_normalized_dict(row: dict) -> dict:
+    """将 location_cache_v3 行转为 API 使用的 normalized_data 格式"""
+    province_zh = _normalize_place_name(row.get("province_zh")) or ""
+    province_en = _normalize_place_name(row.get("province_en")) or ""
+    city_zh = _normalize_place_name(row.get("city_zh")) or ""
+    city_en = _normalize_place_name(row.get("city_en")) or ""
+    district_zh = _normalize_place_name(row.get("district_zh")) or ""
+    district_en = _normalize_place_name(row.get("district_en")) or ""
+
+    admin1_zh = province_zh or None
+    admin1_en = province_en or "unknown"
+    admin2_zh = district_zh or city_zh or None
+    admin2_en = district_en or city_en or _normalize_place_name(row.get("country_en")) or "unknown"
+
+    name_en = city_en or district_en or row.get("country_en") or "Unknown"
+    name_zh = city_zh or district_zh or row.get("country_zh") or "未知位置"
+
+    return {
+        "id": row["id"],
+        "name_en": name_en,
+        "name_zh": name_zh,
+        "latitude": float(row["latitude"]),
+        "longitude": float(row["longitude"]),
+        "country_code": row.get("country_code", "UN"),
+        "admin1_zh": admin1_zh or None,
+        "admin1_en": admin1_en,
+        "admin2_zh": admin2_zh or None,
+        "admin2_en": admin2_en,
+        "admin1_code": None,
+        "admin2_code": None,
+        "province": province_zh or province_en,
+        "city": city_zh or city_en,
+        "district": district_zh or district_en,
+        "geoname_id": None,
+        "population": None,
+        "api_city_id": None,
+        "api_adcode": None,
+    }
+
+
+def _cache_row_to_city_info(row: dict, query_lat: float, query_lon: float) -> CityInfoV2:
+    """将 location_cache_v3 行转为 CityInfoV2（兼容客户端）"""
+    nd = _cache_row_to_normalized_dict(row)
+    return CityInfoV2(
+        id=nd["id"],
+        name_en=nd["name_en"],
+        name_zh=nd["name_zh"],
+        latitude=nd["latitude"],
+        longitude=nd["longitude"],
+        country_code=nd["country_code"],
+        admin1_zh=nd.get("admin1_zh"),
+        admin1_en=nd.get("admin1_en"),
+        admin2_zh=nd.get("admin2_zh"),
+        admin2_en=nd.get("admin2_en"),
+        admin1_code=None,
+        admin2_code=None,
+        province=nd["province"],
+        city=nd["city"],
+        district=nd["district"],
+        data_source="local",
+        geoname_id=None,
+        population=None,
+        distance_km=float(row.get("distance_km", 0)),
+        api_city_id=None,
+        api_adcode=None,
+    )
+
+
+async def save_location_cache_v3(
+    latitude: float, longitude: float, location_info: dict
+) -> Optional[int]:
+    """
+    保存到 location_cache_v3，带去重（坐标 0.0001 度内视为同点）
+    名称规范化：trim 后存储
+    """
+    try:
+        # 规范化
+        country_zh = _normalize_place_name(location_info.get("country_name_zh")) or ""
+        country_en = _normalize_place_name(location_info.get("country_name_en")) or ""
+        province_zh = _normalize_place_name(location_info.get("admin1_name_zh")) or None
+        province_en = _normalize_place_name(location_info.get("admin1_name_en")) or None
+        city_zh = _normalize_place_name(location_info.get("city_name_zh")) or None
+        city_en = _normalize_place_name(location_info.get("city_name_en")) or None
+        district_zh = _normalize_place_name(location_info.get("admin2_name_zh")) or None
+        district_en = _normalize_place_name(location_info.get("admin2_name_en")) or None
+        country_code = (location_info.get("country_code") or "UN").strip().upper()[:2]
+
+        # 国家名兜底
+        if not country_en:
+            country_en = country_code
+        if not country_zh:
+            country_zh = "未知"
+
+        # 去重：同坐标 0.0001 度内已存在则跳过
+        async with db.get_cursor() as cursor:
+            await cursor.execute(
+                """SELECT id FROM location_cache_v3
+                   WHERE ABS(latitude - %s) < 0.0001 AND ABS(longitude - %s) < 0.0001 LIMIT 1""",
+                (latitude, longitude),
+            )
+            if await cursor.fetchone():
+                return None
+
+            await cursor.execute(
+                """INSERT INTO location_cache_v3 (
+                    latitude, longitude, country_code,
+                    country_zh, country_en, province_zh, province_en,
+                    city_zh, city_en, district_zh, district_en
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (
+                    latitude, longitude, country_code,
+                    country_zh, country_en, province_zh, province_en,
+                    city_zh, city_en, district_zh, district_en,
+                ),
+            )
+            return cursor.lastrowid
+    except Exception as e:
+        logger.error(f"保存 location_cache_v3 失败: {e}", exc_info=True)
+        return None
 
 
 # ===== 请求/响应模型 =====
@@ -53,106 +241,37 @@ async def save_cluster_results_to_db(
     llm_results: Dict[str, dict]
 ) -> None:
     """
-    将聚类结果保存到数据库（保存聚类内的所有坐标点）
-    
-    Args:
-        clusters: 聚类结果列表，格式：[(center_lat, center_lon, [坐标点列表]), ...]
-        llm_results: 大模型查询结果，格式：{坐标ID: 位置信息字典, ...}
+    将聚类结果保存到 location_cache_v3（保存聚类内的所有坐标点）
     """
     saved_count = 0
     skipped_count = 0
-    
+
     for center_lat, center_lon, coordinates in clusters:
         if not coordinates:
             continue
-        
-        # 为聚类内的每个坐标点保存位置信息
+
         for coord in coordinates:
             coord_id = coord.id or f"{coord.latitude}_{coord.longitude}"
             location_info = llm_results.get(coord_id)
-            
+
             if not location_info:
-                # 如果该点没有独立结果，尝试使用聚类中心的结果
-                # 查找与该聚类中心匹配的结果（通过坐标匹配）
                 for point_id, result in llm_results.items():
-                    query_lat = result.get('query_latitude')
-                    query_lon = result.get('query_longitude')
-                    if query_lat and query_lon:
-                        if abs(query_lat - center_lat) < 0.0001 and abs(query_lon - center_lon) < 0.0001:
-                            location_info = result
-                            break
-                
+                    qlat = result.get("query_latitude")
+                    qlon = result.get("query_longitude")
+                    if qlat and qlon and abs(qlat - center_lat) < 0.0001 and abs(qlon - center_lon) < 0.0001:
+                        location_info = result
+                        break
                 if not location_info:
-                    logger.warning(f"未找到坐标点的位置信息: coord_id={coord_id}, center=({center_lat}, {center_lon})")
+                    logger.warning(f"未找到坐标点位置信息: {coord_id}")
                     continue
-            
-            city_data = {
-                "name_en": location_info.get("city_name_en") or location_info.get("country_name_en") or "Unknown",
-                "name_zh": location_info.get("city_name_zh") or location_info.get("country_name_zh") or "未知位置",
-                "latitude": coord.latitude,  # 保存原始坐标
-                "longitude": coord.longitude,  # 保存原始坐标
-                "country_code": location_info.get("country_code", "UN"),
-                "province": location_info.get("admin1_name_zh") or location_info.get("admin1_name_en"),
-                "city": location_info.get("city_name_zh") or location_info.get("city_name_en"),
-                "district": location_info.get("admin2_name_zh") or location_info.get("admin2_name_en"),
-                "data_source": "llm",  # 标记为大模型查询
-            }
-            
-            # 检查是否已存在（通过坐标+位置信息组合去重）
-            try:
-                city_id = await save_city_to_db_with_dedup(city_data)
-                if city_id:
-                    saved_count += 1
-                else:
-                    skipped_count += 1
-            except Exception as e:
-                logger.error(f"保存坐标点失败: {e}", exc_info=True)
-    
-    logger.info(f"数据库保存完成: 保存={saved_count}条, 跳过={skipped_count}条")
 
+            cid = await save_location_cache_v3(coord.latitude, coord.longitude, location_info)
+            if cid:
+                saved_count += 1
+            else:
+                skipped_count += 1
 
-async def save_city_to_db_with_dedup(city_data: dict) -> Optional[int]:
-    """
-    保存城市信息到数据库（带去重检查）
-    
-    去重策略：检查 (latitude, longitude, name_en, country_code, province) 组合
-    如果已存在，跳过；如果不存在，插入
-    
-    Args:
-        city_data: 城市信息字典
-    
-    Returns:
-        保存的城市ID，如果已存在或失败返回None
-    """
-    try:
-        check_query = """
-            SELECT id FROM global_cities_v2 
-            WHERE ABS(latitude - %s) < 0.0001  -- 坐标精确匹配（允许小误差）
-            AND ABS(longitude - %s) < 0.0001
-            AND name_en = %s 
-            AND country_code = %s 
-            AND (province = %s OR (province IS NULL AND %s IS NULL))
-        """
-        check_params = (
-            city_data["latitude"],
-            city_data["longitude"],
-            city_data["name_en"],
-            city_data["country_code"],
-            city_data.get("province"),
-            city_data.get("province")
-        )
-        
-        async with db.get_cursor() as cursor:
-            await cursor.execute(check_query, check_params)
-            existing = await cursor.fetchone()
-            if existing:
-                return existing["id"]  # 已存在，返回ID
-        
-        # 不存在，插入新记录
-        return await save_city_to_db(city_data)
-    except Exception as e:
-        logger.error(f"保存城市信息失败: {e}", exc_info=True)
-        return None
+    logger.info(f"location_cache_v3 保存完成: 新增={saved_count}, 跳过={skipped_count}")
 
 
 def convert_llm_result_to_city_info(
@@ -178,7 +297,11 @@ def convert_llm_result_to_city_info(
         # 计算距离
         distance_km = haversine_distance(query_lat, query_lon, city_lat, city_lon)
         
-        # 构建城市信息
+        admin1_zh = llm_result.get("admin1_name_zh")
+        admin1_en = llm_result.get("admin1_name_en") or "unknown"
+        admin2_zh = llm_result.get("admin2_name_zh")
+        admin2_en = llm_result.get("admin2_name_en") or llm_result.get("city_name_en") or llm_result.get("country_name_en") or "unknown"
+
         city_info = CityInfoV2(
             id=0,  # 临时ID，保存到数据库后会更新
             name_en=llm_result.get("city_name_en") or llm_result.get("country_name_en") or "Unknown",
@@ -186,11 +309,15 @@ def convert_llm_result_to_city_info(
             latitude=city_lat,
             longitude=city_lon,
             country_code=llm_result.get("country_code", "UN"),
-            admin1_code=None,  # 大模型不返回行政区代码
+            admin1_zh=admin1_zh,
+            admin1_en=admin1_en,
+            admin2_zh=admin2_zh,
+            admin2_en=admin2_en,
+            admin1_code=None,
             admin2_code=None,
-            province=llm_result.get("admin1_name_zh") or llm_result.get("admin1_name_en"),
+            province=admin1_zh or admin1_en,
             city=llm_result.get("city_name_zh") or llm_result.get("city_name_en"),
-            district=llm_result.get("admin2_name_zh") or llm_result.get("admin2_name_en"),
+            district=admin2_zh or admin2_en,
             data_source="llm",
             geoname_id=None,
             population=None,
@@ -223,7 +350,6 @@ async def batch_get_nearest_cities_v3(
     5. 结果映射（圆心结果 → 原始坐标点）
     6. 保存到数据库（保存聚类内的所有坐标点）
     
-    注意：V3接口需要scikit-learn依赖，启动时已检查，如果未安装会直接报错
     """
     start_time = time.time()
     request_id = IDGenerator.generate_request_id("nearest_cities_v3")
@@ -243,15 +369,12 @@ async def batch_get_nearest_cities_v3(
         unmapped_coords = []  # 未命中的坐标
         
         for coord in request.coordinates:
-            city_data = await query_local_db(coord.latitude, coord.longitude, max_distance_km=3.0)
-            if city_data:
-                # 命中，记录结果
-                normalized_data = validate_and_normalize_location(city_data, coord.latitude, coord.longitude)
-                if normalized_data:
-                    mapped_coords.append((coord, normalized_data))
-                    continue
-            
-            # 未命中，加入待聚类列表
+            row = await query_location_cache_v3(coord.latitude, coord.longitude, max_distance_km=3.0)
+            if row:
+                normalized_data = _cache_row_to_normalized_dict(row)
+                mapped_coords.append((coord, normalized_data))
+                continue
+
             unmapped_coords.append(coord)
         
         logger.info(f"[{request_id}] 步骤1完成: 命中={len(mapped_coords)}个, 未命中={len(unmapped_coords)}个")
@@ -271,6 +394,10 @@ async def batch_get_nearest_cities_v3(
                     latitude=normalized_data["latitude"],
                     longitude=normalized_data["longitude"],
                     country_code=normalized_data["country_code"],
+                    admin1_zh=normalized_data.get("admin1_zh"),
+                    admin1_en=normalized_data.get("admin1_en"),
+                    admin2_zh=normalized_data.get("admin2_zh"),
+                    admin2_en=normalized_data.get("admin2_en"),
                     admin1_code=normalized_data.get("admin1_code"),
                     admin2_code=normalized_data.get("admin2_code"),
                     province=normalized_data["province"],
@@ -363,6 +490,10 @@ async def batch_get_nearest_cities_v3(
                 latitude=normalized_data["latitude"],
                 longitude=normalized_data["longitude"],
                 country_code=normalized_data["country_code"],
+                admin1_zh=normalized_data.get("admin1_zh"),
+                admin1_en=normalized_data.get("admin1_en"),
+                admin2_zh=normalized_data.get("admin2_zh"),
+                admin2_en=normalized_data.get("admin2_en"),
                 admin1_code=normalized_data.get("admin1_code"),
                 admin2_code=normalized_data.get("admin2_code"),
                 province=normalized_data["province"],
